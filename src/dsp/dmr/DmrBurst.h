@@ -40,6 +40,23 @@ enum class DmrDataType {
     Unknown
 };
 
+inline const char* toString(DmrDataType t) {
+    switch (t) {
+        case DmrDataType::PiHeader:                       return "PiHeader";
+        case DmrDataType::VoiceLcHeader:                  return "VoiceLcHeader";
+        case DmrDataType::Terminator:                     return "Terminator";
+        case DmrDataType::Csbk:                           return "Csbk";
+        case DmrDataType::MultiBlockControlHeader:        return "MultiBlockControlHeader";
+        case DmrDataType::MultiBlockControlContinuation:  return "MultiBlockControlContinuation";
+        case DmrDataType::DataHeader:                     return "DataHeader";
+        case DmrDataType::Rate12Data:                     return "Rate12Data";
+        case DmrDataType::Rate34Data:                     return "Rate34Data";
+        case DmrDataType::Idle:                           return "Idle";
+        case DmrDataType::Reserved:                       return "Reserved";
+        default:                                          return "Unknown";
+    }
+}
+
 inline DmrDataType dataTypeFromCode(int code4bits) {
     switch (code4bits & 0x0F) {
         case 0: return DmrDataType::PiHeader;

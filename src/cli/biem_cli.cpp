@@ -14,6 +14,7 @@
 #include "dsp/dmr/DmrBurstEncoder.h"
 #include "dsp/dmr/DmrCallTracker.h"
 #include "dsp/dmr/DmrRfDemodulator.h"
+#include "dsp/dmr/DmrSlotDecoder.h"
 #include "dsp/dmr/DmrSyntheticSource.h"
 #include "net/UdpRawLogger.h"
 #include "net/hytera/HyteraHR659Source.h"
@@ -368,14 +369,23 @@ int runDmrLive(double frequencyHz, const std::string& dbPath, const std::string&
         std::cerr << "[dmr-live] squelch " << (open ? "ACIK" : "kapali") << "\n";
     });
 
+    biem::dsp::dmr::DmrSlotDecoder slotDecoderForDiag; // diagnostic-only - DmrCallTracker has its own internally
+
     bool nextIsSlot1 = true;
     demod.setBurstCallback([&](const biem::dsp::dmr::DmrBurstBytes& b, biem::dsp::dmr::SyncType t) {
         biem::core::CallRecorder& recorder = nextIsSlot1 ? recorderSlot1 : recorderSlot2;
         int slotLabel = nextIsSlot1 ? 1 : 2;
         biem::dsp::dmr::DmrCallTracker& tracker = nextIsSlot1 ? trackerSlot1 : trackerSlot2;
 
-        std::cerr << "[dmr-live] burst alindi: sync-tur=" << static_cast<int>(t) << " slot=" << slotLabel
-                  << " (varsayim - bkz. kaynak yorumu)\n";
+        // Slot Type diagnostic (see DmrSlotDecoder/DmrConstants) - ONLY for
+        // display, so it's easy to see WHY a burst did or didn't start a
+        // call (dataType != VoiceLcHeader is completely normal - most
+        // bursts in a real call are Voice Frame A/B-F, not the header).
+        biem::dsp::dmr::SlotTypeInfo slotInfo = slotDecoderForDiag.decodeSlotType(b);
+        std::cerr << "[dmr-live] burst alindi: sync-tur=" << biem::dsp::dmr::toString(t) << " slot=" << slotLabel
+                  << " (varsayim) renk-kodu=" << slotInfo.colorCode
+                  << " veri-tipi=" << biem::dsp::dmr::toString(slotInfo.dataType)
+                  << " golay-duzeltilen-bit=" << slotInfo.correctedBits << "\n";
 
         bool wasActive = recorder.hasActiveCall();
         tracker.onBurst(b, t);

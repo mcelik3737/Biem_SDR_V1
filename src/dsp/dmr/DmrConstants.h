@@ -29,6 +29,16 @@ enum class SyncType {
     Unknown
 };
 
+inline const char* toString(SyncType t) {
+    switch (t) {
+        case SyncType::BsSourcedVoice: return "BsSourcedVoice";
+        case SyncType::BsSourcedData:  return "BsSourcedData";
+        case SyncType::MsSourcedVoice: return "MsSourcedVoice";
+        case SyncType::MsSourcedData:  return "MsSourcedData";
+        default:                       return "Unknown";
+    }
+}
+
 // 48-bit DMR sync patterns. Source (confirmed by web search, 2026-09,
 // against ETSI TS 102 361 references - see docs/DMR_NOTES.md for the
 // exact search results/citations):
