@@ -1,0 +1,51 @@
+# Build outputs
+build/
+build-*/
+out/
+cmake-build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Install/
+*.cmake
+!cmake/*.cmake
+
+# Compiled
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.pdb
+
+# Qt
+*.autosave
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# IDE
+.vscode/
+.vs/
+.idea/
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data (recordings/db are user data, not source - never commit real recordings)
+/data/recordings/
+/data/*.sqlite3
+/data/*.db
+*.wav
+*.raw-udp
+
+# Local capture dumps from UdpRawLogger (may contain real customer radio traffic)
+captures/
