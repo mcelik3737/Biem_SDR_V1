@@ -11,6 +11,13 @@ constexpr double kSquelchPowerAvgAlpha = 0.001; // ~ms-scale exponential average
 } // namespace
 
 NbfmDemodulator::NbfmDemodulator(NbfmConfig config) : config_(config) {
+    // Negative sign: the hardware is tuned mixerOffsetHz BELOW the wanted
+    // channel, so the channel shows up at +mixerOffsetHz in the raw
+    // baseband spectrum (see NbfmConfig::mixerOffsetHz). Multiplying by
+    // exp(+j*mixerPhaseRad_) with a NEGATIVE phase increment here is the
+    // standard down-conversion that slides +mixerOffsetHz back to 0 Hz.
+    mixerPhaseIncRad_ = -2.0 * kPi * config_.mixerOffsetHz / config_.iqSampleRateHz;
+
     channelLpfAlpha_ = 1.0 - std::exp(-2.0 * kPi * config_.channelHalfBandwidthHz / config_.iqSampleRateHz);
 
     decimationRatio_ = config_.iqSampleRateHz / config_.audioSampleRateHz;
@@ -42,14 +49,33 @@ void NbfmDemodulator::processSamples(const IqSample* samples, size_t count) {
     for (size_t i = 0; i < count; ++i) {
         const IqSample& s = samples[i];
 
+        // --- digital mixer / NCO (BEFORE the channel filter - see class
+        // comment on mixerOffsetHz for why tuning exactly on-channel is
+        // unsafe on this class of dongle, and why this has to run first) ---
+        IqSample mixed = s;
+        if (mixerPhaseIncRad_ != 0.0) {
+            IqSample mixer(static_cast<float>(std::cos(mixerPhaseRad_)),
+                           static_cast<float>(std::sin(mixerPhaseRad_)));
+            mixed = s * mixer;
+            mixerPhaseRad_ += mixerPhaseIncRad_;
+            // Wrap (not reset) so the sinusoid stays phase-continuous across
+            // the wrap - a hard reset to 0 would re-introduce exactly the
+            // kind of discontinuity ("click") this mixer exists to avoid.
+            if (mixerPhaseRad_ > kPi) {
+                mixerPhaseRad_ -= 2.0 * kPi;
+            } else if (mixerPhaseRad_ < -kPi) {
+                mixerPhaseRad_ += 2.0 * kPi;
+            }
+        }
+
         // --- channel-select filter (BEFORE the discriminator - see class
         // comment on channelHalfBandwidthHz for why this has to come
         // first, not after) ---
         channelLpfState_ = IqSample(
             channelLpfState_.real() +
-                static_cast<float>(channelLpfAlpha_) * (s.real() - channelLpfState_.real()),
+                static_cast<float>(channelLpfAlpha_) * (mixed.real() - channelLpfState_.real()),
             channelLpfState_.imag() +
-                static_cast<float>(channelLpfAlpha_) * (s.imag() - channelLpfState_.imag()));
+                static_cast<float>(channelLpfAlpha_) * (mixed.imag() - channelLpfState_.imag()));
         const IqSample& filtered = channelLpfState_;
 
         // --- squelch: exponential moving average of the FILTERED signal's
@@ -78,8 +104,16 @@ void NbfmDemodulator::processSamples(const IqSample* samples, size_t count) {
         double freqHz = freqRadPerSample * (config_.iqSampleRateHz / (2.0 * kPi));
         double audioSample = freqHz / config_.maxDeviationHz;
 
+        // --- DC blocker (removes residual DC/near-DC leakage - e.g. any
+        // small mixer/tuner frequency error - that would otherwise ride
+        // through as a slowly-wandering offset and needlessly consume
+        // headroom before the final clamp) ---
+        double dcBlocked = audioSample - dcBlockPrevIn_ + dcBlockR_ * dcBlockPrevOut_;
+        dcBlockPrevIn_ = audioSample;
+        dcBlockPrevOut_ = dcBlocked;
+
         // --- anti-alias low-pass ahead of decimation ---
-        lpfState_ += lpfAlpha_ * (audioSample - lpfState_);
+        lpfState_ += lpfAlpha_ * (dcBlocked - lpfState_);
 
         // --- drop-sample decimation to audioSampleRateHz ---
         decimationAccumulator_ += 1.0;

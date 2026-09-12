@@ -147,6 +147,16 @@ int runLive(double frequencyHz, const std::string& dbPath, const std::string& re
     cfg.iqSampleRateHz = 240000.0;
     cfg.audioSampleRateHz = 8000.0;
     cfg.squelchThresholdDb = squelchDb;
+    // Tune the dongle mixerOffsetHz BELOW the wanted channel and shift back
+    // in software (see NbfmConfig::mixerOffsetHz, which defaults this to 0
+    // /disabled - live RTL-SDR reception is the one case that must opt in)
+    // instead of tuning exactly on-channel: on zero-IF tuners like the
+    // E4000, tuning on-channel parks the tuner's own DC/LO-leakage spike
+    // directly on top of the wanted signal, which is indistinguishable
+    // from a click/no-audio fault downstream. tunedFrequencyHz below must
+    // stay in sync with this.
+    cfg.mixerOffsetHz = 50000.0;
+    double tunedFrequencyHz = frequencyHz - cfg.mixerOffsetHz;
     biem::dsp::NbfmDemodulator demod(cfg);
 
     biem::core::CallRecord meta;
@@ -173,7 +183,7 @@ int runLive(double frequencyHz, const std::string& dbPath, const std::string& re
 
     biem::dsp::RtlSdrSource src;
     src.setSampleRateHz(cfg.iqSampleRateHz);
-    src.setCenterFrequencyHz(frequencyHz);
+    src.setCenterFrequencyHz(tunedFrequencyHz);
     if (!src.open()) {
         std::cerr << "RTL-SDR acilamadi - baska bir program (SDR#, baska bir biem_cli) cihazi kullaniyor "
                      "olabilir; once onu kapatin.\n";
@@ -181,8 +191,10 @@ int runLive(double frequencyHz, const std::string& dbPath, const std::string& re
     }
     if (gainTenthDb >= 0) src.setGainTenthDb(gainTenthDb);
 
-    std::cerr << frequencyHz << " Hz dinleniyor, squelch esigi " << squelchDb
-              << " dB. Durdurmak icin Enter'a basin.\n";
+    std::cerr << frequencyHz << " Hz dinleniyor (donanim " << tunedFrequencyHz
+              << " Hz'e ayarli, DC spike'i kanaldan uzak tutmak icin - bkz. NbfmConfig::mixerOffsetHz), "
+                 "squelch esigi "
+              << squelchDb << " dB. Durdurmak icin Enter'a basin.\n";
     src.start([&](const biem::dsp::IqSample* samples, size_t count) { demod.processSamples(samples, count); });
     std::cin.get();
     src.stop();

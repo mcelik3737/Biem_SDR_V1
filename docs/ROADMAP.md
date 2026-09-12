@@ -72,12 +72,78 @@ Yani: RTL-SDR → NBFM demod → squelch tabanlı çağrı segmentasyonu → WAV
 SQLite → arama zincirinin **tamamı artık gerçek donanım ve gerçek RF
 sinyaliyle uçtan uca doğrulanmış durumda.**
 
+## "Tık tık" (modülasyon yok) raporu - kök neden + düzeltme
+
+Yukarıdaki gerçek donanım testinden sonra kullanıcı, kayıtlarda konuşma
+yerine yalnızca tık tık gibi bir ses olduğunu, modülasyonun hiç
+duyulmadığını bildirdi. İlk teori (discriminatörden önce kanal filtresi
+eksikliği, `9b3cd10`) kendi kendine yapılan doğrulamada sentetik gürültüye
+karşı ölçülebilir bir iyileşme göstermedi - kullanıcıya da bu sınırlama
+dürüstçe belirtildi. Kullanıcı çalışan bir referans işaret etti: aynı
+kullanıcının Python ile yazdığı (ayrı `mcelik3737/biem_sdr` reposundaki)
+çalışan analog FM alıcısı.
+
+**Gerçek kök neden** (Python referansıyla karşılaştırarak bulundu): Python
+kodu donanımı hedef kanalın TAM ÜZERİNE değil, kasıtlı olarak kanaldan
+uzağa (`center_hz`) ayarlıyor, sonra farkı (`channel.frequency_hz -
+center_hz`) yazılımda dijital mikser ile geri kaydırıyor
+(`dsp.py`'deki `FMDemodulator.process`). Bizim C++ kodumuz ise donanımı
+doğrudan hedef frekansa ayarlıyordu. Bunun önemi: E4000 gibi zero-IF
+tuner'lar, ayarlandıkları frekansın TAM ÜZERİNDE bir DC spike/LO sızıntısı
+üretir. Kanalın tam üzerine ayar yapılırsa bu spike istenen sinyalle AYNI
+frekansta çakışır - hiçbir filtre aynı frekanstaki iki şeyi ayıramaz. Bu,
+yazılımda düzeltilemeyen bir donanım/ayar hatasıdır; tek çözüm donanımı
+kanaldan uzağa ayarlayıp farkı yazılımda geri kaydırmaktır.
+
+**Uygulanan düzeltme** (`NbfmDemodulator`'a `mixerOffsetHz` alanı +
+sürekli-fazlı dijital mikser/NCO, artı discriminatör sonrası DC-blocker):
+
+- `biem_cli.cpp`'nin `runLive()`'ı artık donanımı `frequencyHz -
+  mixerOffsetHz` (varsayılan 50 kHz altı) frekansına ayarlıyor, `cfg`'de
+  `mixerOffsetHz`'i buna eşit set ediyor.
+- `NbfmConfig::mixerOffsetHz` **varsayılan olarak 0 (kapalı)** - sadece
+  gerçek RTL-SDR donanım yolu (`runLive`) bunu açıkça set ediyor. Bunun
+  nedeni: sentetik testler, `biem_cli demo` ve dosyadan tekrar oynatma gibi
+  zaten baseband'de IQ üreten/okuyan tüm çağıranlar için mikser anlamsız -
+  varsayılan sıfır olmasaydı bunlara yanlışlıkla bir kayma karışırdı (ilk
+  denemede tam olarak bu oldu: varsayılan 50 kHz iken `demo` komutu ve
+  mevcut testler IQ örnekleme hızlarına göre Nyquist'i aşan anlamsız bir
+  kaymayla bozulurdu - fark edilip düzeltildi).
+
+**Doğrulama (dürüst, sınırları belirtilmiş)**: Linux sandbox'ta bu sefer
+gerçekten AYIRT EDEN bir sentetik test eklendi
+(`testNbfmRecoversAudioDespiteDcSpikeWithMixerOffset`, `tests/test_nbfm.cpp`) -
+gerçek DC spike'ı taklit eden sabit (0 Hz) güçlü bir karmaşık sapma +
+istenen FM sinyalini +50 kHz'e yerleştirip, doğru `mixerOffsetHz` ile geri
+kazanımı ton-korelasyonu (basit sıfır-geçiş sayımından çok daha katı bir
+ölçüt - ilk denemede sıfır-geçiş sayımının bu senaryoyu AYIRT ETMEDİĞİ
+görüldü, bu yüzden değiştirildi) ile ölçüyor. Düzeltme açıkken korelasyon
+~0.98, kasıtlı olarak `mixerOffsetHz=0` yapılıp yeniden çalıştırıldığında
+~0.77 (test eşiği 0.85 - ikisini de gerçekten ayırt ediyor, bu manuel
+olarak her iki durumda da çalıştırılıp doğrulandı). `ctest` ile 3/3 test
+PASSED, `-Wall -Wextra -Wpedantic -Wshadow` ile de temiz derleniyor.
+
+**Doğrulanmayan / hâlâ açık**: Bu tamamen sentetik bir doğrulama - gerçek
+E4000 DC spike'ının genliği/şekli farklı olabilir, ve "kanalın tam üzerine
+ayarlanmış donanım + üzerine binen gerçek spike" senaryosu yazılımda hiç
+tekrar üretilemez (yukarıda açıklandığı gibi, bu durumda ikisi matematiksel
+olarak aynı frekansta olduğu için düzeltilemez - tek çözüm zaten uygulanan
+"kanaldan uzağa ayarla" yaklaşımı). Yani bu, önceki teoriden çok daha güçlü
+ve kanıta dayalı bir teşhis (kanıtlanmış çalışan bir referans
+implementasyonuyla doğrudan karşılaştırmaya dayanıyor) ama **gerçek
+donanımda henüz test edilmedi** - kullanıcının bir sonraki gerçek RF
+denemesinde doğrulanması gerekiyor.
+
 ## Faz 1 — Sırada (kullanıcıdan girdi bekleyen)
 
-- [ ] **Ses kalitesi doğrulaması**: yukarıdaki gerçek kayıtlar dinlenip
-      NBFM demodülatörün çıkardığı sesin anlaşılır/net olup olmadığı teyit
-      edilecek (bkz. `NbfmDemodulator.h`'daki "known simplifications" -
-      basit tek-kutuplu decimation filtresi, gerekirse iyileştirilebilir).
+- [ ] **Ses kalitesi doğrulaması (öncelikli - mixerOffsetHz düzeltmesi
+      sonrası tekrar test)**: yukarıdaki "tık tık" raporu üzerine
+      `mixerOffsetHz` mikser + DC-blocker düzeltmesi eklendi (bkz. ilgili
+      bölüm yukarıda) ama gerçek donanımda henüz doğrulanmadı - kullanıcı
+      güncel kodla yeni bir gerçek kayıt alıp dinleyerek konuşmanın
+      anlaşılır olup olmadığını teyit etmeli. Hâlâ anlaşılmazsa/tık tık
+      sürüyorsa bir sonraki şüpheli: `NbfmDemodulator.h`'daki "known
+      simplifications" - basit tek-kutuplu decimation filtresi.
 - [ ] **Hytera HR659 protokolü**: port numarası/numaraları + gerçek bir UDP
       yakalaması (`UdpRawLogger` ile) ya da resmi Hytera protokol dokümanı.
       Bkz. `docs/HYTERA_HR659.md`.

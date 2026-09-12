@@ -20,7 +20,9 @@ WavIqSource WavIqSource::makeSyntheticFm(double sampleRateHz,
                                           double audioToneHz,
                                           double fmDeviationHz,
                                           double durationSeconds,
-                                          double noiseAmplitude) {
+                                          double noiseAmplitude,
+                                          double carrierOffsetHz,
+                                          double dcSpikeAmplitude) {
     WavIqSource src;
     src.sampleRateHz_ = sampleRateHz;
     src.fromMemory_ = true;
@@ -29,6 +31,7 @@ WavIqSource WavIqSource::makeSyntheticFm(double sampleRateHz,
     src.memorySamples_.reserve(n);
 
     double phase = 0.0;
+    double carrierPhase = 0.0;
 
     // Small deterministic PRNG (xorshift-ish LCG) for reproducible additive
     // "noise" in a test signal - not meant to model any real channel, just
@@ -46,8 +49,22 @@ WavIqSource WavIqSource::makeSyntheticFm(double sampleRateHz,
         double audio = std::sin(2.0 * kPi * audioToneHz * t);
         double instFreq = fmDeviationHz * audio;
         phase += 2.0 * kPi * instFreq / sampleRateHz;
-        float re = static_cast<float>(std::cos(phase) + nextNoise());
-        float im = static_cast<float>(std::sin(phase) + nextNoise());
+
+        // Place the FM signal at +carrierOffsetHz (0 = plain baseband, the
+        // default, unchanged behavior) by rotating it with a second,
+        // independent phase accumulator before adding noise/DC spike.
+        double fmRe = std::cos(phase);
+        double fmIm = std::sin(phase);
+        double co = std::cos(carrierPhase);
+        double si = std::sin(carrierPhase);
+        double shiftedRe = fmRe * co - fmIm * si;
+        double shiftedIm = fmRe * si + fmIm * co;
+        carrierPhase += 2.0 * kPi * carrierOffsetHz / sampleRateHz;
+
+        // Constant (true zero-Hz) complex bias standing in for a tuner's
+        // DC/LO-leakage spike - see the header comment on this parameter.
+        float re = static_cast<float>(shiftedRe + dcSpikeAmplitude + nextNoise());
+        float im = static_cast<float>(shiftedIm + dcSpikeAmplitude * 0.6 + nextNoise());
         src.memorySamples_.emplace_back(re, im);
     }
     return src;

@@ -28,11 +28,22 @@ class WavIqSource : public IqSource {
 public:
     WavIqSource(std::string path, double sampleRateHz);
 
+    // carrierOffsetHz/dcSpikeAmplitude model a zero-IF tuner (e.g. the
+    // Elonics E4000) tuned `carrierOffsetHz` away from the wanted channel:
+    // the FM signal is placed at +carrierOffsetHz instead of at 0 Hz, and a
+    // constant (true zero-Hz) complex bias of magnitude dcSpikeAmplitude is
+    // added to every sample to stand in for the tuner's own DC/LO-leakage
+    // spike - see NbfmConfig::mixerOffsetHz for why these two, together,
+    // are what make on-channel tuning unsafe on this class of dongle. Both
+    // default to 0 (no offset, no spike), matching plain makeSyntheticFm
+    // behavior for every existing caller.
     static WavIqSource makeSyntheticFm(double sampleRateHz,
                                         double audioToneHz,
                                         double fmDeviationHz,
                                         double durationSeconds,
-                                        double noiseAmplitude = 0.0);
+                                        double noiseAmplitude = 0.0,
+                                        double carrierOffsetHz = 0.0,
+                                        double dcSpikeAmplitude = 0.0);
 
     bool open() override;
     void close() override;
