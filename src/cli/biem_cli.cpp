@@ -364,6 +364,10 @@ int runDmrLive(double frequencyHz, const std::string& dbPath, const std::string&
     double tunedFrequencyHz = frequencyHz - cfg.mixerOffsetHz;
     biem::dsp::dmr::DmrRfDemodulator demod(cfg);
 
+    demod.setSquelchCallback([&](bool open) {
+        std::cerr << "[dmr-live] squelch " << (open ? "ACIK" : "kapali") << "\n";
+    });
+
     bool nextIsSlot1 = true;
     demod.setBurstCallback([&](const biem::dsp::dmr::DmrBurstBytes& b, biem::dsp::dmr::SyncType t) {
         biem::core::CallRecorder& recorder = nextIsSlot1 ? recorderSlot1 : recorderSlot2;
