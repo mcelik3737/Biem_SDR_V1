@@ -366,11 +366,28 @@ int runDmrLive(double frequencyHz, const std::string& dbPath, const std::string&
 
     bool nextIsSlot1 = true;
     demod.setBurstCallback([&](const biem::dsp::dmr::DmrBurstBytes& b, biem::dsp::dmr::SyncType t) {
-        if (nextIsSlot1) {
-            trackerSlot1.onBurst(b, t);
-        } else {
-            trackerSlot2.onBurst(b, t);
+        biem::core::CallRecorder& recorder = nextIsSlot1 ? recorderSlot1 : recorderSlot2;
+        int slotLabel = nextIsSlot1 ? 1 : 2;
+        biem::dsp::dmr::DmrCallTracker& tracker = nextIsSlot1 ? trackerSlot1 : trackerSlot2;
+
+        std::cerr << "[dmr-live] burst alindi: sync-tur=" << static_cast<int>(t) << " slot=" << slotLabel
+                  << " (varsayim - bkz. kaynak yorumu)\n";
+
+        bool wasActive = recorder.hasActiveCall();
+        tracker.onBurst(b, t);
+        bool isActive = recorder.hasActiveCall();
+
+        if (!wasActive && isActive) {
+            const auto& meta = recorder.activeCallMeta();
+            std::cerr << "[dmr-live] cagri basladi (slot " << slotLabel << "): "
+                      << (meta && meta->radioId ? std::to_string(*meta->radioId) : std::string("?")) << " -> "
+                      << (meta && meta->talkgroupId ? "TG " + std::to_string(*meta->talkgroupId)
+                          : (meta && meta->destRadioId ? "ID " + std::to_string(*meta->destRadioId)
+                                                        : std::string("?"))) << "\n";
+        } else if (wasActive && !isActive) {
+            std::cerr << "[dmr-live] cagri bitti (slot " << slotLabel << ").\n";
         }
+
         nextIsSlot1 = !nextIsSlot1;
     });
     demod.setLevelCallback([&](double powerDb) {
