@@ -11,7 +11,9 @@ kullanıcıdan ne bekleniyor" tek bakışta görülsün diye.
 - [x] `dsp/RtlSdrSource`: librtlsdr tabanlı, CMake'te opsiyonel (bu sandbox'ta derlenmedi — kütüphane yok)
 - [x] `dsp/dmr/`: FEC primitifleri (Hamming(15,11,3), Golay(20,8,7), BPTC(196,96) interleave),
       frame sync (senkron kelimeleri web'den doğrulandı), slot/LC decode iskeleti
-- [x] `net/`: INetworkIngestSource arayüzü, UdpRawLogger (tam çalışır), HyteraHR659Source (stub)
+- [x] `net/`: INetworkIngestSource arayüzü, UdpRawLogger (tam çalışır),
+      HyteraHR659Source (varsayımsal parser - bkz. Faz 1, gerçek veriyle
+      henüz doğrulanmadı)
 - [x] `ui/`: Qt6 MainWindow + ChannelList + CallLog(arama) + Playback (bu sandbox'ta derlenmedi — Qt6 yok)
 - [x] `cli/`: biem_cli — Qt'siz headless kayıt aracı
 - [x] `tests/`: FEC round-trip, NBFM sentetik ton, Database CRUD/arama
@@ -142,9 +144,16 @@ değil) ayrıntılı teyidi hâlâ bekleniyor - bkz. Faz 1.
       Butterworth kanal filtresi + 5. dereceden bandpass ses filtresi
       kullanıyor, bizimki tek kutuplu IIR - daha keskin bir filtreye
       geçmek gerekebilir).
-- [ ] **Hytera HR659 protokolü**: port numarası/numaraları + gerçek bir UDP
-      yakalaması (`UdpRawLogger` ile) ya da resmi Hytera protokol dokümanı.
-      Bkz. `docs/HYTERA_HR659.md`.
+- [ ] **Hytera HR659 protokolü - gerçek veriyle doğrulama**: kullanıcının
+      elinde paket/port/döküman olmadığı için (`elimde paket yok`) açık
+      kaynak araştırmasına (OpenIPSC) dayanan VARSAYIMSAL bir parser
+      yazıldı - `HyteraHR659Source` artık stub değil, gerçek bir UDP
+      soketiyle uçtan uca test edildi (paket→parse→CallRecorder→SQLite→
+      arama), ve yeni `biem_cli hytera-live` komutuyla çalıştırılabilir.
+      Ama byte OFSETLERİ tamamen tahmin - gerçek HR659 trafiğiyle **henüz
+      doğrulanmadı**. Sırada: kullanıcı repeater'a erişince `hytera-live`
+      komutunu gerçek trafiğe karşı çalıştırıp `[hytera-hr659]` tanılama
+      satırlarını paylaşması. Ayrıntı: `docs/HYTERA_HR659.md`.
 - [ ] **DMR burst bit ofsetlerinin doğrulanması**: ETSI TS 102 361-1
       tablolarıyla ya da bilinen-doğru bir açık kaynak referansla (OP25 /
       dsd-fme) bit-bit karşılaştırma. Bkz. `docs/DMR_NOTES.md`.

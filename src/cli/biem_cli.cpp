@@ -12,6 +12,7 @@
 #include "dsp/NbfmDemodulator.h"
 #include "dsp/WavIqSource.h"
 #include "net/UdpRawLogger.h"
+#include "net/hytera/HyteraHR659Source.h"
 
 #if defined(BIEM_HAVE_RTLSDR)
 #include "dsp/RtlSdrSource.h"
@@ -35,6 +36,11 @@ void printUsage(const char* argv0) {
         << "  udp-capture <port> <log_klasoru>\n"
         << "      Verilen UDP portunu dinler, gelen her paketi hex+raw olarak\n"
         << "      kaydeder - bkz. docs/HYTERA_HR659.md. Durdurmak icin Enter'a basin.\n"
+        << "  hytera-live <port> <db_yolu> <kayit_klasoru> <kanal_etiketi>\n"
+        << "      Hytera HR659 icin VARSAYIMSAL/DOGRULANMAMIS paket ayristirici -\n"
+        << "      bkz. docs/HYTERA_HR659.md. Her paket ham olarak da kaydedilir;\n"
+        << "      cikan [hytera-hr659] tanilama satirlarini gercek trafikle\n"
+        << "      karsilastirip alan konumlarini dogrulayin/duzeltin.\n"
 #if defined(BIEM_HAVE_RTLSDR)
         << "  live <frekans_hz> <db_yolu> <kayit_klasoru> [squelch_db] [kazanc_onda_db]\n"
         << "      Gercek RTL-SDR donanimindan analog FM alir, kaydeder. Her ~1\n"
@@ -136,6 +142,43 @@ int runUdpCapture(uint16_t port, const std::string& logDir) {
     return 0;
 }
 
+int runHyteraLive(uint16_t port, const std::string& dbPath, const std::string& recDir,
+                    const std::string& channelLabel) {
+    // See src/net/hytera/HyteraHR659Source.h and docs/HYTERA_HR659.md:
+    // this parses against an ASSUMED, UNCONFIRMED packet layout (no real
+    // HR659 capture existed when it was written). Every packet is still
+    // captured to <recDir>/../hytera_raw (hex + raw) regardless of whether
+    // parsing succeeds, so nothing is lost if the layout turns out wrong -
+    // and the per-packet [hytera-hr659] diagnostic below is exactly what's
+    // needed to correct it once real traffic arrives.
+    biem::core::Database db(dbPath);
+    db.migrate();
+    biem::core::CallRecorder recorder(db, recDir, 8000);
+
+    biem::net::hytera::HyteraHR659Source src(port, recDir + "/hytera_raw", channelLabel);
+    src.setCallStartCallback([&](biem::core::CallRecord meta) { recorder.beginCall(std::move(meta)); });
+    src.setCallEndCallback([&]() {
+        if (recorder.hasActiveCall()) {
+            auto rec = recorder.endCall();
+            if (rec) {
+                std::cerr << "[hytera-live] cagri kaydedildi (sadece metadata - ses yok, bkz. "
+                             "AMBE+2/IVoiceDecoder): "
+                          << rec->title << " (" << rec->durationMs << " ms)\n";
+            }
+        }
+    });
+
+    if (!src.start()) {
+        std::cerr << "UDP port " << port << " dinlenemedi.\n";
+        return 1;
+    }
+    std::cerr << "Hytera HR659 (varsayimsal parser - dogrulanmadi) UDP port " << port
+              << " dinleniyor. Durdurmak icin Enter'a basin.\n";
+    std::cin.get();
+    src.stop();
+    return 0;
+}
+
 #if defined(BIEM_HAVE_RTLSDR)
 int runLive(double frequencyHz, const std::string& dbPath, const std::string& recDir, double squelchDb,
             int gainTenthDb) {
@@ -227,6 +270,9 @@ int main(int argc, char** argv) {
         }
         if (cmd == "udp-capture" && argc >= 4) {
             return runUdpCapture(static_cast<uint16_t>(std::stoul(argv[2])), argv[3]);
+        }
+        if (cmd == "hytera-live" && argc >= 6) {
+            return runHyteraLive(static_cast<uint16_t>(std::stoul(argv[2])), argv[3], argv[4], argv[5]);
         }
 #if defined(BIEM_HAVE_RTLSDR)
         if (cmd == "live" && argc >= 5) {
