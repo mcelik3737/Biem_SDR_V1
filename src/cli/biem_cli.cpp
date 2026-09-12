@@ -36,8 +36,12 @@ void printUsage(const char* argv0) {
         << "      Verilen UDP portunu dinler, gelen her paketi hex+raw olarak\n"
         << "      kaydeder - bkz. docs/HYTERA_HR659.md. Durdurmak icin Enter'a basin.\n"
 #if defined(BIEM_HAVE_RTLSDR)
-        << "  live <frekans_hz> <db_yolu> <kayit_klasoru> [kazanc_onda_db]\n"
-        << "      Gercek RTL-SDR donanimindan analog FM alir, kaydeder.\n"
+        << "  live <frekans_hz> <db_yolu> <kayit_klasoru> [squelch_db] [kazanc_onda_db]\n"
+        << "      Gercek RTL-SDR donanimindan analog FM alir, kaydeder. Her ~1\n"
+        << "      saniyede bir anlik guc seviyesini (dB) ve squelch acik/kapali\n"
+        << "      durumunu ekrana yazar - squelch_db'yi bu okumalara gore\n"
+        << "      ayarlayin (bos kanal seviyesinin biraz uzerinde secin).\n"
+        << "      squelch_db verilmezse varsayilan -50 kullanilir.\n"
 #endif
         ;
 }
@@ -133,7 +137,8 @@ int runUdpCapture(uint16_t port, const std::string& logDir) {
 }
 
 #if defined(BIEM_HAVE_RTLSDR)
-int runLive(double frequencyHz, const std::string& dbPath, const std::string& recDir, int gainTenthDb) {
+int runLive(double frequencyHz, const std::string& dbPath, const std::string& recDir, double squelchDb,
+            int gainTenthDb) {
     biem::core::Database db(dbPath);
     db.migrate();
     biem::core::CallRecorder recorder(db, recDir, 8000);
@@ -141,6 +146,7 @@ int runLive(double frequencyHz, const std::string& dbPath, const std::string& re
     biem::dsp::NbfmConfig cfg;
     cfg.iqSampleRateHz = 240000.0;
     cfg.audioSampleRateHz = 8000.0;
+    cfg.squelchThresholdDb = squelchDb;
     biem::dsp::NbfmDemodulator demod(cfg);
 
     biem::core::CallRecord meta;
@@ -149,24 +155,34 @@ int runLive(double frequencyHz, const std::string& dbPath, const std::string& re
     meta.frequencyHz = frequencyHz;
 
     demod.setSquelchCallback([&](bool open) {
+        std::cerr << "[live] squelch " << (open ? "ACIK (kayit basliyor)" : "kapali") << "\n";
         if (open) {
             recorder.beginCall(meta);
         } else if (recorder.hasActiveCall()) {
-            recorder.endCall();
+            auto rec = recorder.endCall();
+            if (rec) {
+                std::cerr << "[live] cagri kaydedildi: " << rec->audioFilePath << " (" << rec->durationMs
+                          << " ms)\n";
+            }
         }
     });
     demod.setAudioCallback([&](const int16_t* pcm, size_t count) { recorder.pushAudio(pcm, count); });
+    demod.setLevelCallback([&](double powerDb) {
+        std::cerr << "[live] guc seviyesi: " << powerDb << " dB (squelch esigi: " << squelchDb << " dB)\n";
+    });
 
     biem::dsp::RtlSdrSource src;
     src.setSampleRateHz(cfg.iqSampleRateHz);
     src.setCenterFrequencyHz(frequencyHz);
     if (!src.open()) {
-        std::cerr << "RTL-SDR acilamadi.\n";
+        std::cerr << "RTL-SDR acilamadi - baska bir program (SDR#, baska bir biem_cli) cihazi kullaniyor "
+                     "olabilir; once onu kapatin.\n";
         return 1;
     }
     if (gainTenthDb >= 0) src.setGainTenthDb(gainTenthDb);
 
-    std::cerr << frequencyHz << " Hz dinleniyor. Durdurmak icin Enter'a basin.\n";
+    std::cerr << frequencyHz << " Hz dinleniyor, squelch esigi " << squelchDb
+              << " dB. Durdurmak icin Enter'a basin.\n";
     src.start([&](const biem::dsp::IqSample* samples, size_t count) { demod.processSamples(samples, count); });
     std::cin.get();
     src.stop();
@@ -202,8 +218,9 @@ int main(int argc, char** argv) {
         }
 #if defined(BIEM_HAVE_RTLSDR)
         if (cmd == "live" && argc >= 5) {
-            int gain = argc >= 6 ? std::stoi(argv[5]) : -1;
-            return runLive(std::stod(argv[2]), argv[3], argv[4], gain);
+            double squelch = argc >= 6 ? std::stod(argv[5]) : -50.0;
+            int gain = argc >= 7 ? std::stoi(argv[6]) : -1;
+            return runLive(std::stod(argv[2]), argv[3], argv[4], squelch, gain);
         }
 #endif
     } catch (const std::exception& ex) {

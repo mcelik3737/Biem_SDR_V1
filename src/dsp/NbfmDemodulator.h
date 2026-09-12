@@ -36,11 +36,20 @@ class NbfmDemodulator {
 public:
     using AudioCallback = std::function<void(const int16_t* pcm, size_t count)>;
     using SquelchCallback = std::function<void(bool open)>;
+    using LevelCallback = std::function<void(double powerDb)>;
 
     explicit NbfmDemodulator(NbfmConfig config);
 
     void setAudioCallback(AudioCallback cb) { audioCb_ = std::move(cb); }
     void setSquelchCallback(SquelchCallback cb) { squelchCb_ = std::move(cb); }
+
+    // Fires roughly every `everyNSamples` IQ samples (default: about once a
+    // second at typical RTL-SDR rates) with the current smoothed power in
+    // dB - the same number the squelch threshold is compared against. This
+    // exists so a live tool can print real numbers for the operator to
+    // calibrate squelchThresholdDb against, instead of guessing blind (see
+    // the class-level caveat: there's no universal correct default).
+    void setLevelCallback(LevelCallback cb, uint64_t everyNSamples = 0);
 
     // Consumes IQ samples at config.iqSampleRateHz. Call repeatedly with
     // consecutive chunks - all filter/decimator/squelch state persists
@@ -55,6 +64,9 @@ private:
     NbfmConfig config_;
     AudioCallback audioCb_;
     SquelchCallback squelchCb_;
+    LevelCallback levelCb_;
+    uint64_t levelReportInterval_ = 0;
+    uint64_t levelSampleCounter_ = 0;
 
     IqSample prevSample_{0.0f, 0.0f};
 

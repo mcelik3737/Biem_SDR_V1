@@ -21,6 +21,13 @@ NbfmDemodulator::NbfmDemodulator(NbfmConfig config) : config_(config) {
     deemphasisAlpha_ = dt / (tau + dt);
 }
 
+void NbfmDemodulator::setLevelCallback(LevelCallback cb, uint64_t everyNSamples) {
+    levelCb_ = std::move(cb);
+    levelReportInterval_ = everyNSamples != 0
+                                ? everyNSamples
+                                : static_cast<uint64_t>(config_.iqSampleRateHz); // ~once/sec by default
+}
+
 double NbfmDemodulator::discriminate(const IqSample& s) {
     IqSample prod = s * std::conj(prevSample_);
     prevSample_ = s;
@@ -41,6 +48,13 @@ void NbfmDemodulator::processSamples(const IqSample* samples, size_t count) {
         if (newSquelchOpen != squelchOpen_) {
             squelchOpen_ = newSquelchOpen;
             if (squelchCb_) squelchCb_(squelchOpen_);
+        }
+
+        if (levelCb_ && levelReportInterval_ != 0) {
+            if (++levelSampleCounter_ >= levelReportInterval_) {
+                levelSampleCounter_ = 0;
+                levelCb_(powerDb);
+            }
         }
 
         // --- FM discriminator (instantaneous frequency, normalized to ~[-1,1]) ---
