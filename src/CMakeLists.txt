@@ -20,6 +20,9 @@ set(BIEM_CORE_SOURCES
     dsp/dmr/DmrSlotDecoder.cpp
     dsp/dmr/DmrLinkControl.cpp
     dsp/dmr/DmrCallTracker.cpp
+    dsp/dmr/DmrRfDemodulator.cpp
+    dsp/dmr/DmrSyntheticSource.cpp
+    dsp/dmr/DmrBurstEncoder.cpp
 
     net/UdpRawLogger.cpp
     net/hytera/HyteraHR659Source.cpp

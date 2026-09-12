@@ -70,6 +70,48 @@ WavIqSource WavIqSource::makeSyntheticFm(double sampleRateHz,
     return src;
 }
 
+WavIqSource WavIqSource::makeSyntheticFsk(const std::vector<double>& symbolDeviationsHz,
+                                           double symbolRateHz,
+                                           double iqSampleRateHz,
+                                           double carrierOffsetHz,
+                                           double noiseAmplitude) {
+    WavIqSource src;
+    src.sampleRateHz_ = iqSampleRateHz;
+    src.fromMemory_ = true;
+
+    int samplesPerSymbol = std::max(1, static_cast<int>(std::lround(iqSampleRateHz / symbolRateHz)));
+    src.memorySamples_.reserve(symbolDeviationsHz.size() * static_cast<size_t>(samplesPerSymbol));
+
+    double phase = 0.0;
+    double carrierPhase = 0.0;
+
+    uint32_t rngState = 0x1234567u; // same small deterministic PRNG as makeSyntheticFm, same rationale
+    auto nextNoise = [&]() -> double {
+        rngState = rngState * 1664525u + 1013904223u;
+        double u = static_cast<double>(rngState) / 4294967296.0;
+        return (u * 2.0 - 1.0) * noiseAmplitude;
+    };
+
+    for (double devHz : symbolDeviationsHz) {
+        for (int j = 0; j < samplesPerSymbol; ++j) {
+            phase += 2.0 * kPi * devHz / iqSampleRateHz;
+
+            double fmRe = std::cos(phase);
+            double fmIm = std::sin(phase);
+            double co = std::cos(carrierPhase);
+            double si = std::sin(carrierPhase);
+            double shiftedRe = fmRe * co - fmIm * si;
+            double shiftedIm = fmRe * si + fmIm * co;
+            carrierPhase += 2.0 * kPi * carrierOffsetHz / iqSampleRateHz;
+
+            float re = static_cast<float>(shiftedRe + nextNoise());
+            float im = static_cast<float>(shiftedIm + nextNoise());
+            src.memorySamples_.emplace_back(re, im);
+        }
+    }
+    return src;
+}
+
 bool WavIqSource::open() {
     if (fromMemory_) return true;
     std::ifstream test(path_, std::ios::binary);

@@ -45,6 +45,23 @@ public:
                                         double carrierOffsetHz = 0.0,
                                         double dcSpikeAmplitude = 0.0);
 
+    // Generic multi-level FSK synthesis: holds each entry of
+    // `symbolDeviationsHz` (instantaneous frequency deviation from center,
+    // in Hz) constant for exactly round(iqSampleRateHz/symbolRateHz) raw
+    // samples, then moves to the next entry - a plain rectangular pulse
+    // shape, NOT root-raised-cosine like a real transmitter (see
+    // dsp/dmr/DmrRfDemodulator.h's class comment: this is deliberately
+    // generic/modulation-agnostic, so DMR-specific concerns - the bit ->
+    // dibit -> deviation mapping - live in dsp/dmr/DmrSyntheticSource.h,
+    // not here; some other multi-level FSK scheme could reuse this
+    // unchanged). carrierOffsetHz/noiseAmplitude mean the same as in
+    // makeSyntheticFm above.
+    static WavIqSource makeSyntheticFsk(const std::vector<double>& symbolDeviationsHz,
+                                         double symbolRateHz,
+                                         double iqSampleRateHz,
+                                         double carrierOffsetHz = 0.0,
+                                         double noiseAmplitude = 0.0);
+
     bool open() override;
     void close() override;
 

@@ -11,6 +11,10 @@
 #include "core/Database.h"
 #include "dsp/NbfmDemodulator.h"
 #include "dsp/WavIqSource.h"
+#include "dsp/dmr/DmrBurstEncoder.h"
+#include "dsp/dmr/DmrCallTracker.h"
+#include "dsp/dmr/DmrRfDemodulator.h"
+#include "dsp/dmr/DmrSyntheticSource.h"
 #include "net/UdpRawLogger.h"
 #include "net/hytera/HyteraHR659Source.h"
 
@@ -27,6 +31,11 @@ void printUsage(const char* argv0) {
         << "  demo <db_yolu> <kayit_klasoru>\n"
         << "      Sentetik FM sinyali uretir, demodule eder, kaydeder ve\n"
         << "      veritabanina yazar - donanim olmadan uctan uca test.\n"
+        << "  dmr-demo <db_yolu> <kayit_klasoru>\n"
+        << "      demo'nun DMR karsiligi: sentetik 4FSK sinyali uretir,\n"
+        << "      DmrRfDemodulator + DmrCallTracker ile cozer, kaydeder. Icerik\n"
+        << "      cozme guvenilirligi notu icin docs/ROADMAP.md ve\n"
+        << "      tests/test_dmr_rf.cpp'ye bakin.\n"
         << "  search <db_yolu> [baslik_icerir]\n"
         << "      Veritabanindaki cagrilari listeler (opsiyonel baslik filtresi).\n"
         << "  alias-radio <db_yolu> <radio_id> <etiket>\n"
@@ -48,6 +57,10 @@ void printUsage(const char* argv0) {
         << "      durumunu ekrana yazar - squelch_db'yi bu okumalara gore\n"
         << "      ayarlayin (bos kanal seviyesinin biraz uzerinde secin).\n"
         << "      squelch_db verilmezse varsayilan -50 kullanilir.\n"
+        << "  dmr-live <frekans_hz> <db_yolu> <kayit_klasoru> [squelch_db] [kazanc_onda_db]\n"
+        << "      live'in DMR karsiligi. Slot 1/2 ayrimi VARSAYIMSAL (sirayla\n"
+        << "      degisen, gercek CACH/zamanlama takibi degil) - bkz. kaynak\n"
+        << "      kodundaki yorum ve docs/ROADMAP.md.\n"
 #endif
         ;
 }
@@ -92,6 +105,79 @@ int runDemo(const std::string& dbPath, const std::string& recDir) {
     if (recorder.hasActiveCall()) recorder.endCall();
 
     std::cerr << "[demo] tamamlandi.\n";
+    return 0;
+}
+
+int runDmrDemo(const std::string& dbPath, const std::string& recDir) {
+    // DMR counterpart to "demo" above: no hardware, entirely synthetic,
+    // but this time exercising DMR's own RF chain end to end -
+    // DmrRfDemodulator (4FSK demod + symbol timing acquisition + burst
+    // assembly - see docs/ROADMAP.md, this used to not exist at all) ->
+    // DmrCallTracker (Slot Type/BPTC/LC decode, already existed) ->
+    // CallRecorder -> Database, the same destination "demo" and "live"
+    // use for the analog path.
+    //
+    // Radio ID 123123 is used here (not an arbitrary-looking value like
+    // 555555) because it's a KNOWN-GOOD value for this exact scenario -
+    // see tests/test_dmr_rf.cpp's testDmrRfFullStackReliabilityIsBoundedAndNonZero:
+    // DmrRfDemodulator's lack of a real matched filter (documented, known
+    // simplification) gives it a residual bit error rate that BPTC's
+    // correction capacity does not ALWAYS overcome for arbitrary content
+    // yet - most random IDs currently do NOT decode cleanly through the
+    // full stack. This demo is meant to show the pipeline working, not
+    // to overstate today's reliability - see that test and
+    // docs/ROADMAP.md for the honest, quantified state of this gap.
+    biem::core::Database db(dbPath);
+    db.migrate();
+    biem::core::CallRecorder recorder(db, recDir, 8000);
+
+    const int colorCode = 5;
+    const uint32_t talkgroupId = 100;
+    const uint32_t radioId = 123123;
+
+    biem::dsp::dmr::DmrCallTracker tracker(recorder, /*slotNumber=*/1, /*frequencyHz=*/446006250.0,
+                                            "Demo DMR Kanal");
+
+    biem::dsp::dmr::DmrRfConfig cfg;
+    cfg.iqSampleRateHz = 240000.0;
+    cfg.squelchThresholdDb = -60.0; // permissive - the synthetic signal is "always on"
+    biem::dsp::dmr::DmrRfDemodulator demod(cfg);
+    demod.setBurstCallback([&](const biem::dsp::dmr::DmrBurstBytes& b, biem::dsp::dmr::SyncType t) {
+        tracker.onBurst(b, t);
+    });
+
+    // Preamble (0xDD - see tests/test_dmr_rf.cpp for why a balanced,
+    // zero-average-deviation pattern matters here) + burst1 (sacrificial
+    // acquisition-verification reference - see DmrRfDemodulator.h's class
+    // comment on why the first burst of any transmission is never itself
+    // reported) + burst2 (VoiceLcHeader carrying the real TG/Radio ID,
+    // starts the call) + burst3 (Terminator, ends it).
+    std::vector<uint8_t> bits;
+    for (int i = 0; i < 400; ++i) {
+        int bitPos = 7 - (i % 8);
+        bits.push_back(static_cast<uint8_t>((0xDD >> bitPos) & 1u));
+    }
+    auto appendBurst = [&](const biem::dsp::dmr::DmrBurstBytes& burst) {
+        for (uint8_t byte : burst) {
+            for (int bi = 7; bi >= 0; --bi) bits.push_back(static_cast<uint8_t>((byte >> bi) & 1u));
+        }
+    };
+    appendBurst(biem::dsp::dmr::encodeVoiceLcHeaderBurst(biem::dsp::dmr::SyncType::BsSourcedData, colorCode,
+                                                          biem::dsp::dmr::Flco::GroupVoice, 1, 2));
+    appendBurst(biem::dsp::dmr::encodeVoiceLcHeaderBurst(biem::dsp::dmr::SyncType::BsSourcedData, colorCode,
+                                                          biem::dsp::dmr::Flco::GroupVoice, talkgroupId, radioId));
+    appendBurst(biem::dsp::dmr::encodeTerminatorBurst(biem::dsp::dmr::SyncType::BsSourcedData, colorCode,
+                                                       biem::dsp::dmr::Flco::GroupVoice, talkgroupId, radioId));
+
+    auto devs = biem::dsp::dmr::bitsToSymbolDeviationsHz(bits);
+    auto src = biem::dsp::WavIqSource::makeSyntheticFsk(devs, biem::dsp::dmr::kDmrSymbolRateHz,
+                                                         cfg.iqSampleRateHz, /*carrierOffsetHz=*/0.0,
+                                                         /*noiseAmplitude=*/0.02);
+    src.start([&](const biem::dsp::IqSample* samples, size_t count) { demod.processSamples(samples, count); });
+
+    if (recorder.hasActiveCall()) recorder.endCall();
+
+    std::cerr << "[dmr-demo] tamamlandi (locked=" << demod.locked() << ").\n";
     return 0;
 }
 
@@ -244,6 +330,72 @@ int runLive(double frequencyHz, const std::string& dbPath, const std::string& re
     if (recorder.hasActiveCall()) recorder.endCall();
     return 0;
 }
+
+int runDmrLive(double frequencyHz, const std::string& dbPath, const std::string& recDir, double squelchDb,
+               int gainTenthDb) {
+    // DMR counterpart to runLive() above - same RtlSdrSource, same
+    // mixerOffsetHz DC-spike-avoidance tuning trick, but DmrRfDemodulator
+    // (4FSK) instead of NbfmDemodulator, feeding two DmrCallTracker
+    // instances instead of one CallRecorder-facing squelch callback.
+    //
+    // Slot 1 vs slot 2: DmrRfDemodulator reports bursts in ARRIVAL ORDER
+    // only (see its header - it does not itself determine which physical
+    // TDMA slot a burst belongs to, that needs either timing-grid
+    // tracking or CACH decode, neither implemented yet). This ASSUMES a
+    // busy repeater alternates slot 1/slot 2/slot 1/... in strict
+    // lockstep and demuxes purely by counting - correct for a repeater
+    // actively using both slots back to back, WRONG the moment only one
+    // slot is active (everything would incorrectly bounce between both
+    // trackers) or a burst is ever missed (permanently flips slot
+    // labeling from then on). Flagged here, in the class comment, and in
+    // docs/ROADMAP.md - fixing it needs real slot-timing/CACH work, not
+    // attempted in this pass.
+    biem::core::Database db(dbPath);
+    db.migrate();
+    biem::core::CallRecorder recorderSlot1(db, recDir, 8000);
+    biem::core::CallRecorder recorderSlot2(db, recDir, 8000);
+    biem::dsp::dmr::DmrCallTracker trackerSlot1(recorderSlot1, 1, frequencyHz, "Live DMR");
+    biem::dsp::dmr::DmrCallTracker trackerSlot2(recorderSlot2, 2, frequencyHz, "Live DMR");
+
+    biem::dsp::dmr::DmrRfConfig cfg;
+    cfg.iqSampleRateHz = 240000.0;
+    cfg.squelchThresholdDb = squelchDb;
+    cfg.mixerOffsetHz = 50000.0; // see NbfmConfig::mixerOffsetHz / runLive() above for why
+    double tunedFrequencyHz = frequencyHz - cfg.mixerOffsetHz;
+    biem::dsp::dmr::DmrRfDemodulator demod(cfg);
+
+    bool nextIsSlot1 = true;
+    demod.setBurstCallback([&](const biem::dsp::dmr::DmrBurstBytes& b, biem::dsp::dmr::SyncType t) {
+        if (nextIsSlot1) {
+            trackerSlot1.onBurst(b, t);
+        } else {
+            trackerSlot2.onBurst(b, t);
+        }
+        nextIsSlot1 = !nextIsSlot1;
+    });
+    demod.setLevelCallback([&](double powerDb) {
+        std::cerr << "[dmr-live] guc seviyesi: " << powerDb << " dB (squelch esigi: " << squelchDb
+                  << " dB, kilit: " << (demod.locked() ? "VAR" : "yok") << ")\n";
+    });
+
+    biem::dsp::RtlSdrSource src;
+    src.setSampleRateHz(cfg.iqSampleRateHz);
+    src.setCenterFrequencyHz(tunedFrequencyHz);
+    if (!src.open()) {
+        std::cerr << "RTL-SDR acilamadi - baska bir program (SDR#, baska bir biem_cli) cihazi kullaniyor "
+                     "olabilir; once onu kapatin.\n";
+        return 1;
+    }
+    if (gainTenthDb >= 0) src.setGainTenthDb(gainTenthDb);
+
+    std::cerr << frequencyHz << " Hz DMR dinleniyor (donanim " << tunedFrequencyHz
+              << " Hz'e ayarli), squelch esigi " << squelchDb
+              << " dB. Slot 1/2 ayrimi VARSAYIMSAL (bkz. kaynak yorumu). Durdurmak icin Enter'a basin.\n";
+    src.start([&](const biem::dsp::IqSample* samples, size_t count) { demod.processSamples(samples, count); });
+    std::cin.get();
+    src.stop();
+    return 0;
+}
 #endif
 
 } // namespace
@@ -258,6 +410,9 @@ int main(int argc, char** argv) {
     try {
         if (cmd == "demo" && argc >= 4) {
             return runDemo(argv[2], argv[3]);
+        }
+        if (cmd == "dmr-demo" && argc >= 4) {
+            return runDmrDemo(argv[2], argv[3]);
         }
         if (cmd == "search" && argc >= 3) {
             return runSearch(argv[2], argc >= 4 ? argv[3] : "");
@@ -279,6 +434,11 @@ int main(int argc, char** argv) {
             double squelch = argc >= 6 ? std::stod(argv[5]) : -50.0;
             int gain = argc >= 7 ? std::stoi(argv[6]) : -1;
             return runLive(std::stod(argv[2]), argv[3], argv[4], squelch, gain);
+        }
+        if (cmd == "dmr-live" && argc >= 5) {
+            double squelch = argc >= 6 ? std::stod(argv[5]) : -50.0;
+            int gain = argc >= 7 ? std::stoi(argv[6]) : -1;
+            return runDmrLive(std::stod(argv[2]), argv[3], argv[4], squelch, gain);
         }
 #endif
     } catch (const std::exception& ex) {

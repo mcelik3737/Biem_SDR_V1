@@ -71,14 +71,34 @@ doğrudan (`curl`/tarayıcı ile) çekip birebir karşılaştırmak.
    `DmrSlotDecoder::decodeSlotType` bunu doğrudan port ediyor — bu modüldeki
    en güvenilir burst-layout-specific kod parçası, çünkü kod bloğu olarak
    alıntılandı (düzyazı özetten değil).
+5. **264-bit burst'ün tam alan yerleşimi** (Info1/SlotType1/Sync/SlotType2/
+   Info2) — DMR RF demodülatörü (`DmrRfDemodulator`) çalışması sırasında
+   **iki bağımsız yöntemle** doğrulandı, aşağıdaki "⚠️" bölümünde daha önce
+   sadece varsayım olarak işaretlenmiş Info1/Info2 sınırlarını artık güçlü
+   kanıt seviyesine taşıyor:
+   - Yöntem 1: yukarıdaki (4) maddesindeki alıntılanmış byte-ofset
+     formüllerinin bit-bit elle takibi (hangi byte'ın hangi bitleri Slot
+     Type'a, hangileri Sync'e ait olduğu) şu yerleşimi veriyor:
+     Info1(98) + SlotType-yarım1(10) + Sync(48) + SlotType-yarım2(10) +
+     Info2(98) = 264.
+   - Yöntem 2 (bağımsız çapraz kontrol): genel bir DMR sinyal işleme
+     kaynağı (lyonscomputer.com.au/MMDVM/DMR-Signal-Processing-Notes,
+     WebSearch ile bulundu) burst'ü "108-bit payload + 48-bit SYNC +
+     108-bit payload" olarak tanımlıyor — 108 = 98+10 olduğu için bu, daha
+     kaba bir granülerlikte AYNI yerleşimi doğruluyor.
+   İki bağımsız kaynağın örtüşmesi bu yerleşimi "kendi varsayımımız"
+   olmaktan çıkarıp makul güvenle doğrulanmış seviyesine taşıyor. Sabitler:
+   `DmrConstants::kBurstSyncStartBit=108`, `kBurstBitsAfterSync=108`.
+   `DmrSlotDecoder::extractInfoBitsForBptc`'nin önceden "UNVERIFIED"
+   işaretli varsayımı bu nedenle artık aynı iki kaynakla destekleniyor —
+   aşağıdaki "⚠️" bölümü buna göre güncellendi.
 
 ## ⚠️ Kendi varsayımımız / DOĞRULANMADI
 
-- **Info1/Info2 alan sınırları** (`DmrSlotDecoder::extractInfoBitsForBptc`):
-  Slot Type'ın byte 12-13 ve 19-20'yi kullandığından yola çıkarak "Info1 =
-  byte 0-11 + byte12'nin üst 2 biti (98 bit), Info2 = byte20'nin alt 2 biti +
-  byte 21-32 (98 bit)" varsayıldı. Bu, gördüğümüz somut byte ofsetleriyle
-  *tutarlı* ama bağımsız olarak *doğrulanmadı*.
+- ~~**Info1/Info2 alan sınırları**~~ — artık yukarıdaki "✅" bölümünün 5.
+  maddesinde iki bağımsız kaynakla doğrulandı (bkz. orada). Önceki metin
+  ("Info1 = byte 0-11 + byte12'nin üst 2 biti, Info2 = byte20'nin alt 2
+  biti + byte 21-32") doğru çıktı.
 - **BPTC'nin 99→96 bit indirgemesi**: satır-data ∩ sütun-data kesişimi 9×11=99
   hücre veriyor, DMR payload'ı 96 bit — aradaki 3 bitin "rezerve" olduğu ve
   bizim bunları satır-major sırada **ilk 3 aday hücre** olarak attığımız
@@ -100,12 +120,81 @@ doğrudan (`curl`/tarayıcı ile) çekip birebir karşılaştırmak.
    doğrudan) alıp bu repodaki karşılıklarıyla satır satır karşılaştırın —
    özellikle `BPTC19696.cpp`'nin veri-çıkarma sırası ve `DMRSlotType.cpp`'nin
    tam bağlamı (Info1/Info2 sınırları oradan da çıkarılabilir olabilir).
-2. Gerçek bir DMR kaydıyla (SDR ile alınmış ham I/Q, ya da bir DMR
-   repeater'ından log) `DmrFrameSync`'in kilitlenip kilitlenmediğini,
-   ardından `DmrSlotDecoder::decodeSlotType`'ın makul (Golay `correctedBits
-   != -1`) sonuçlar üretip üretmediğini test edin.
+2. ~~Gerçek bir DMR kaydıyla `DmrFrameSync`'in kilitlenip kilitlenmediğini
+   test edin~~ — bu artık mümkün: `DmrRfDemodulator` (bkz. aşağıdaki yeni
+   bölüm) tam bunu yapan, gerçek RTL-SDR donanımıyla `biem_cli dmr-live`
+   üzerinden test edilebilecek parça. Sentetik sinyalle doğrulandı, gerçek
+   donanımla **henüz doğrulanmadı** — sıradaki gerçek adım bu.
 3. LC alanlarına (TG/Radio ID) CRC doğrulaması ekleyin ki yanlış hizalanmış
    frame'ler sessizce yanlış sayı üretmek yerine reddedilsin.
+4. RF demodülatörün kalıntı bit hata oranını düşürecek gerçek bir eşlenmiş
+   (matched/RRC) filtre ve/veya daha iyi sembol zamanlama takibi ekleyin -
+   bkz. aşağıdaki yeni bölümdeki "tam yığın güvenilirliği" bulgusu.
+
+## ✅ Yeni: DMR'nin RF tarafı (DmrRfDemodulator) - havadan gerçek 4FSK alımı
+
+Önceki durum: yukarıdaki her şey (FEC, senkron, Slot Type/LC decode) bit
+seviyesinde hazırdı ama ham RTL-SDR IQ'sundan gerçek 4FSK demodülasyonu +
+sembol zamanlama + burst hizalama YOKTU (`docs/ROADMAP.md`'de açıkça
+belirtilmişti). `src/dsp/dmr/DmrRfDemodulator.*` bu boşluğu dolduruyor -
+analog tarafta `NbfmDemodulator`'ın yaptığının DMR karşılığı.
+
+**4FSK fiziksel katman sabitleri** (`DmrConstants.h`'daki `kDmr*`) - iki
+bağımsız kaynakla çapraz doğrulandı:
+- Sembol hızı 4800 sembol/sn, sapma seviyeleri ±648/±1944 Hz: genel bir
+  kaynaktan (lyonscomputer.com.au/MMDVM/DMR-Signal-Processing-Notes).
+- Dibit↔seviye eşlemesi: g4klx/MMDVM'nin gerçek firmware kodundan
+  (`DMRDMOTX.cpp` TX tablosu VE `DMRDMORX.cpp` RX eşik mantığı, ayrı ayrı
+  fetch edildi) - ikisi birbiriyle tam tutarlı çıktı (RX'in "sample <
+  -threshold → dibit 01" kuralı TX'in "01 → en düşük seviye" girdisiyle
+  birebir örtüşüyor), ayrıca dört seviye arasında Gray-code yapısı var
+  (ardışık her çift sadece 1 bit farklı) - gerçek, çalışan bir tasarımın
+  beklenen özelliği.
+
+**Sembol zamanlama edinimi**: donanımın hangi ham örnekte gerçek sembol
+sınırının olduğu bilinmiyor - `DmrRfDemodulator` samplesPerSymbol (240kHz/
+4800=50) olası fazın HEPSİNİ paralel dener (toplam maliyet tek bir fazı
+takip etmekle aynı - her ham örnek tam olarak bir faza ait). **Önemli
+düzeltme**: ilk tasarım "bir senkron kelimesi + ardından gelen 108 bitin
+gelmesi" yeterli görüyordu ama o 108 bit HİÇBİR ŞEYLE doğrulanmıyordu -
+`tests/test_dmr_rf.cpp`'nin saf gürültü testi bunun gürültü üzerinde
+sahte kilitlenmeye yol açtığını yakaladı. Düzeltme: bir faz ancak TAM 264
+bit arayla İKİ senkron kelimesi görülürse güvenilir kabul ediliyor
+(klasik "edin, sonra doğrula" deseni) - yanlış kilitlenme olasılığını
+ihmal edilebilir seviyeye indiriyor (gerçek sayılar commit mesajında),
+bedeli: her gerçek iletimin ilk burst'ü sadece doğrulama referansı olarak
+harcanıyor, kendisi hiç raporlanmıyor (~27.5ms ek edinim gecikmesi).
+
+**Bilinen sınırlama - tam yığın güvenilirliği**: `tests/test_dmr_rf.cpp`
+geliştirilirken ölçüldü: `DmrRfDemodulator`'ın gerçek bir eşlenmiş (RRC)
+filtresi olmadığı için (tek örnek/kısa boxcar ortalaması - bkz. sınıfın
+kendi yorumu) kalıntı bir bit hata oranı var. Bu oran senkron kelimesi
+için sorun değil (48 bitte 4 hata toleransı var) ama 96-bit LC payload'ını
+BPTC'nin düzeltme kapasitesini bazen aşıyor - `Bptc196x96::decode` tek
+geçişten (satır+sütun, 1 kez) 4 geçişe (`kMaxDecodeIterations=4`,
+iteratif ürün-kod çözme) çıkarıldı ama bu bile **rastgele TG/Radio ID
+değerlerinin çoğunu** güvenilir şekilde düzeltmeye yetmiyor - ölçülen
+test (`testDmrRfFullStackReliabilityIsBoundedAndNonZero`) kasıtlı olarak
+"0 değil ama %100 de değil" aralığını doğruluyor, "her zaman çalışır"
+iddiasında bulunmuyor. Gerçek düzeltme gerçek bir eşlenmiş filtre ve/veya
+daha iyi sembol zamanlama takibi gerektirir - bkz. yukarıdaki "Nasıl
+ilerlenir" madde 4.
+
+**Doğrulama durumu**: tamamen sentetik (gerçek DMR sinyaline benzeyen ama
+gerçek olmayan, dikdörtgen darbe şekilli 4FSK test sinyali - `WavIqSource::
+makeSyntheticFsk` + `dsp/dmr/DmrSyntheticSource.h`) - `biem_cli dmr-demo`
+ile uçtan uca (encode → 4FSK → demod → Slot Type/BPTC/LC decode →
+CallRecorder → SQLite → arama) çalıştığı gösterildi. **Gerçek RTL-SDR
+donanımıyla, gerçek bir DMR sinyaliyle HENÜZ test edilmedi** - `biem_cli
+dmr-live` bunun için hazır ama kullanıcının gerçek bir DMR vericisine
+erişimi olduğunda doğrulanmalı.
+
+**Slot 1/2 ayrımı**: `DmrRfDemodulator` burst'leri sadece VARIŞ SIRASINA
+göre raporluyor, hangi fiziksel TDMA slotuna ait olduğunu bilmiyor (gerçek
+CACH/zamanlama takibi yok). `biem_cli dmr-live` şimdilik bunu sırayla
+alternatif slot1/slot2 atayarak VARSAYIYOR - aktif her iki slotu da
+kullanan meşgul bir repeater için makul ama tek slot aktifken ya da bir
+burst kaçırılırsa YANLIŞ. Açıkça işaretlendi, düzeltilmedi.
 
 ## ❌ Henüz yok: DMR ses (AMBE+2 vocoder)
 

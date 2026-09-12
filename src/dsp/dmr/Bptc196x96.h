@@ -32,16 +32,18 @@ class Bptc196x96 {
 public:
     // `raw196` is 196 bits (0/1 per element) as received, in already-
     // deinterleaved-INPUT order - i.e. this function itself calls
-    // deinterleave() first. Runs one row-correction pass then one
-    // column-correction pass (standard iterative product-code decoding
-    // would repeat this a few times for noisier input - see
-    // docs/DMR_NOTES.md; one pass is what's implemented here), then
-    // extracts the 96 payload bits. Returns false only if the row/column
-    // data-position tables are internally inconsistent (a programming
-    // error, not a real-world "bad frame" condition - bad frames just
-    // produce wrong/corrected bits, decode() doesn't attempt to detect
-    // "too corrupted to trust" itself; that's left to the caller, e.g. via
-    // a CRC check elsewhere in the DMR message it decoded).
+    // deinterleave() first. Runs alternating row-correction/column-
+    // correction passes (standard iterative product-code decoding - see
+    // the .cpp for how many rounds and why: originally just one pass, but
+    // tests/test_dmr_rf.cpp's full-stack test showed that wasn't enough
+    // to reliably correct the residual bit errors a real (synthetic-RF)
+    // round trip actually produces), then extracts the 96 payload bits.
+    // Returns false only if the row/column data-position tables are
+    // internally inconsistent (a programming error, not a real-world "bad
+    // frame" condition - bad frames just produce wrong/corrected bits,
+    // decode() doesn't attempt to detect "too corrupted to trust" itself;
+    // that's left to the caller, e.g. via a CRC check elsewhere in the DMR
+    // message it decoded).
     static bool decode(const std::array<uint8_t, 196>& raw196, std::array<uint8_t, 96>& payloadOut);
 
     // Inverse of decode(): places the 96 payload bits (plus 3 always-zero

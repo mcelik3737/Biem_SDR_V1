@@ -9,8 +9,10 @@ kullanıcıdan ne bekleniyor" tek bakışta görülsün diye.
 - [x] `core/`: CallRecord, ChannelConfig, Database (SQLite), CallRecorder, WavWriter
 - [x] `dsp/`: IqSource arayüzü, WavIqSource (dosya/sentetik kaynak), NBFM demodülatör + squelch
 - [x] `dsp/RtlSdrSource`: librtlsdr tabanlı, CMake'te opsiyonel (bu sandbox'ta derlenmedi — kütüphane yok)
-- [x] `dsp/dmr/`: FEC primitifleri (Hamming(15,11,3), Golay(20,8,7), BPTC(196,96) interleave),
-      frame sync (senkron kelimeleri web'den doğrulandı), slot/LC decode iskeleti
+- [x] `dsp/dmr/`: FEC primitifleri (Hamming(15,11,3), Golay(20,8,7), BPTC(196,96) interleave,
+      artık iteratif decode), frame sync (senkron kelimeleri web'den doğrulandı), slot/LC decode,
+      ve `DmrRfDemodulator` (4FSK RF demod + burst hizalama - bkz. Faz 1, gerçek donanımla
+      henüz doğrulanmadı) + `DmrBurstEncoder` (test/demo icin encode)
 - [x] `net/`: INetworkIngestSource arayüzü, UdpRawLogger (tam çalışır),
       HyteraHR659Source (varsayımsal parser - bkz. Faz 1, gerçek veriyle
       henüz doğrulanmadı)
@@ -154,9 +156,28 @@ değil) ayrıntılı teyidi hâlâ bekleniyor - bkz. Faz 1.
       doğrulanmadı**. Sırada: kullanıcı repeater'a erişince `hytera-live`
       komutunu gerçek trafiğe karşı çalıştırıp `[hytera-hr659]` tanılama
       satırlarını paylaşması. Ayrıntı: `docs/HYTERA_HR659.md`.
-- [ ] **DMR burst bit ofsetlerinin doğrulanması**: ETSI TS 102 361-1
-      tablolarıyla ya da bilinen-doğru bir açık kaynak referansla (OP25 /
-      dsd-fme) bit-bit karşılaştırma. Bkz. `docs/DMR_NOTES.md`.
+- [x] ~~DMR'nin RF tarafı eksik (havadan gerçek 4FSK alımı yok)~~ - kullanıcı
+      TETRA'ya geçmeden önce bunun bitirilmesini istedi (Recommended
+      seçenek), ve artık bitti: `DmrRfDemodulator` (4FSK demod + sembol
+      zamanlama edinimi + burst hizalama - `NbfmDemodulator`'ın DMR
+      karşılığı, aynı mixerOffsetHz DC-spike-önleme tekniğiyle), yeni
+      `biem_cli dmr-demo`/`dmr-live` komutları, `DmrBurstEncoder` (test/demo
+      için gerçek Golay+BPTC+LC kodlu burst üretici). 264-bit burst
+      yerleşimi artık iki bağımsız kaynakla doğrulandı (önceki "burst bit
+      ofsetlerinin doğrulanması" maddesi bu şekilde çözüldü - bkz.
+      `docs/DMR_NOTES.md`). `Bptc196x96::decode` tek geçişten 4 geçişe
+      (iteratif) çıkarıldı. Gerçek bir UDP soketi/donanım gerekmeden
+      `biem_cli dmr-demo` ile uçtan uca (encode→4FSK→demod→decode→DB→arama)
+      çalıştığı doğrulandı - **TG 100 doğru şekilde geri kazanıldı**.
+      **Dürüst sınırlar** (detaylar `docs/DMR_NOTES.md`'de): (1) gerçek
+      RTL-SDR donanımıyla HENÜZ test edilmedi - `dmr-live` hazır, kullanıcı
+      gerçek bir DMR sinyaline erişince denemeli; (2) tam yığın (encode→RF→
+      decode) güvenilirliği rastgele içerik için %100 DEĞİL - eşlenmiş
+      (RRC) filtre eksikliğinden kaynaklanan kalıntı bit hatası BPTC'nin
+      düzeltme kapasitesini bazen aşıyor, ölçüldü ve dürüstçe test edildi
+      (`testDmrRfFullStackReliabilityIsBoundedAndNonZero`), gizlenmedi; (3)
+      slot 1/2 ayrımı sırayla-alternatif VARSAYIMI - gerçek CACH/zamanlama
+      takibi yok.
 - [ ] **DMR ses (AMBE+2) decode kararı**: hangi harici decoder/lisans
       yaklaşımıyla ilerlenecek — kullanıcıyla netleştirilecek.
 - [x] ~~Windows'ta ilk gerçek derleme~~ — yukarıda, tamamlandı.
@@ -173,6 +194,25 @@ değil) ayrıntılı teyidi hâlâ bekleniyor - bkz. Faz 1.
       operatörün sinyal var/yok görmesi için)
 - [ ] Çağrı başlığı (Title) üretim kuralı: kullanıcıdan örnek/kural istenmeli
       (örn. "Grup adı + saat" mi, yoksa özel bir eşleme tablosu mu?)
+
+## Faz 2.5 — TETRA (kullanıcı isteğiyle DMR RF'inden sonraya ertelendi)
+
+Kullanıcı "TETRA'yı da havadan deneyelim, DMR ve analog gibi" dedi;
+kendisine DMR'nin RF tarafının aslında henüz analog kadar bitmemiş
+olduğu (bkz. yukarıdaki Faz 1 maddesi, o zaman hâlâ açıktı) açıklandı ve
+"önce DMR'nin RF'ini bitir" (Recommended) seçildi - bu doküman o işin
+şimdi bittiğini gösteriyor. TETRA henüz başlanmadı. Kapsam farkı
+büyük - kayıt altına alınsın diye not:
+
+- Modülasyon: π/4-DQPSK (4FSK değil) - bu depodaki hem analog hem DMR
+  demodülatörlerinin ortak temeli olan FM discriminator burada işe
+  yaramaz, tamamen farklı bir alım zinciri gerekir.
+- TDMA: 4 slot (DMR 2 slot)
+- FEC: RCPC (rate-compatible punctured convolutional) kod - DMR'nin blok
+  kodlarından (Hamming/Golay/BPTC) temelden farklı
+- Ses: ACELP codec (AMBE+2'den farklı, o da muhtemelen patentli/lisanslı)
+- Gerçekçi ilk sürüm muhtemelen sadece burst/frame senkronizasyonu olur;
+  tam çözme bu oturumdaki DMR RF işinden büyük bir çaba gerektirir.
 
 ## Açık sorular (kullanıcıya sorulacak / onay bekleyen)
 

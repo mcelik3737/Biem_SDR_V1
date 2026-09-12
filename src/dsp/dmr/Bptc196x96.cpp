@@ -16,6 +16,7 @@ constexpr int kRows = 13; // Hamming(13,9) column length
 constexpr int kCols = 15; // Hamming(15,11) row length
 static_assert(kRows * kCols + 1 == kBptcTotalBits, "grid + 1 reserved bit must equal 196");
 constexpr int kReservedCandidateCount = 3; // 9*11 - 96 == 3, see header comment
+constexpr int kMaxDecodeIterations = 4;    // see decode()'s comment
 
 bool isDataRow(int row0Indexed) {
     int pos1Indexed = row0Indexed + 1;
@@ -69,25 +70,38 @@ std::array<uint8_t, 196> Bptc196x96::deinterleave(const std::array<uint8_t, 196>
 bool Bptc196x96::decode(const std::array<uint8_t, 196>& raw196, std::array<uint8_t, 96>& payloadOut) {
     std::array<uint8_t, 196> grid = deinterleave(raw196);
 
-    // Row-correction pass over ALL 13 rows (not just data rows): for a
-    // correctly-constructed linear product code the parity rows satisfy
-    // the row code too, by linearity - see header comment. Running
-    // correction over all rows/columns (not just "data" ones) is standard
-    // iterative product-code decoding.
-    for (int r = 0; r < kRows; ++r) {
-        std::array<uint8_t, 15> row{};
-        for (int c = 0; c < kCols; ++c) row[c] = grid[r * kCols + c];
-        std::array<uint8_t, 11> unused{};
-        Hamming1511::decode(row, unused);
-        for (int c = 0; c < kCols; ++c) grid[r * kCols + c] = row[c];
-    }
+    // Row+column correction, iterated (see header comment: "a real
+    // iterative product-code decoder would repeat this a few times for
+    // noisier input - one pass is what's implemented here" was the
+    // original state). A single pass only fixes a row/column with AT MOST
+    // one error each (Hamming(15,11)/(13,9) are single-error-correcting);
+    // two errors in the same row or column confuse a single pass, but
+    // correcting OTHER rows/columns first can reduce a cell to its last
+    // wrong bit, making a previously-uncorrectable row/column fixable on
+    // a later pass - the standard reason iterative product-code decoding
+    // needs more than one round trip. This was raised from theoretical
+    // ("should iterate") to load-bearing by tests/test_dmr_rf.cpp's
+    // full-stack test: driving real (Golay+BPTC-encoded) content through
+    // DmrRfDemodulator's small-but-nonzero residual bit error rate (see
+    // that demodulator's own known-simplifications list) showed most
+    // tried payloads failing to decode with only one pass, and correctly
+    // decoding with this loop.
+    for (int iter = 0; iter < kMaxDecodeIterations; ++iter) {
+        for (int r = 0; r < kRows; ++r) {
+            std::array<uint8_t, 15> row{};
+            for (int c = 0; c < kCols; ++c) row[c] = grid[r * kCols + c];
+            std::array<uint8_t, 11> unused{};
+            Hamming1511::decode(row, unused);
+            for (int c = 0; c < kCols; ++c) grid[r * kCols + c] = row[c];
+        }
 
-    for (int c = 0; c < kCols; ++c) {
-        std::array<uint8_t, 13> col{};
-        for (int r = 0; r < kRows; ++r) col[r] = grid[r * kCols + c];
-        std::array<uint8_t, 9> unused{};
-        Hamming139::decode(col, unused);
-        for (int r = 0; r < kRows; ++r) grid[r * kCols + c] = col[r];
+        for (int c = 0; c < kCols; ++c) {
+            std::array<uint8_t, 13> col{};
+            for (int r = 0; r < kRows; ++r) col[r] = grid[r * kCols + c];
+            std::array<uint8_t, 9> unused{};
+            Hamming139::decode(col, unused);
+            for (int r = 0; r < kRows; ++r) grid[r * kCols + c] = col[r];
+        }
     }
 
     auto candidates = buildCandidateList();

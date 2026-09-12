@@ -79,4 +79,48 @@ inline constexpr int kBptcInterleaveMultiplier = 181;
 inline constexpr uint32_t kGolaySlotTypeGenPoly = 0x00000C75u;
 inline constexpr int kGolaySlotTypeGenDegree = 11;
 
+// --- 264-bit burst layout (all bit counts, derived not guessed) -----------
+// Cross-checked two independent ways: (1) walking the exact byte/bit
+// offsets DMRSlotType.cpp uses (see docs/DMR_NOTES.md item 4, ported
+// verbatim into DmrSlotDecoder::decodeSlotType) shows Slot Type's 20-bit
+// Golay codeword is split 10 bits before the sync word and 10 bits after
+// it, sandwiched as Info1(98) + SlotType1(10) + Sync(48) + SlotType2(10) +
+// Info2(98) = 264; (2) independently, lyonscomputer.com.au's DMR signal
+// processing notes describe the same burst as "108-bit payload + 48-bit
+// SYNC + 108-bit payload" (108 = 98+10, i.e. the same split at a coarser
+// granularity) - both agree.
+inline constexpr int kBurstTotalBits = 264;
+inline constexpr int kBurstSyncStartBit = 108;  // 0-indexed bit position where SYNC begins
+inline constexpr int kBurstBitsAfterSync = kBurstTotalBits - kBurstSyncStartBit - kSyncPatternBits; // 108
+
+// --- 4FSK physical layer (symbol rate, deviation, slicing threshold) -----
+// Symbol rate: CONFIRMED by general DMR reference (lyonscomputer.com.au
+// DMR-Signal-Processing-Notes): 4800 symbols/sec, 2 bits/symbol.
+inline constexpr double kDmrSymbolRateHz = 4800.0;
+// Deviation levels: CONFIRMED two independent ways - the same reference
+// states raw FSK frequencies of +1944/+648/-648/-1944 Hz, and g4klx/MMDVM's
+// real firmware (DMRDMOTX.cpp, fetched 2026-09) uses internal levels
+// +1362/+454/-454/-1362 for the same four symbols with ratio 1362:454 =
+// 3.0003 - the same 3:1 ratio as 1944:648 - independently corroborating
+// the same four-level structure.
+inline constexpr double kDmrInnerDeviationHz = 648.0;
+inline constexpr double kDmrOuterDeviationHz = 1944.0;
+// Dibit<->level mapping: CONFIRMED from g4klx/MMDVM DMRDMOTX.cpp (TX table)
+// cross-checked against DMRDMORX.cpp (RX slicer thresholds) - both fetched
+// 2026-09, and mutually consistent (RX's "sample < -threshold -> 01" lines
+// up exactly with TX's "01 -> lowest level" entry, and so on for all four):
+//   dibit 11 -> +kDmrOuterDeviationHz (highest)
+//   dibit 10 -> +kDmrInnerDeviationHz
+//   dibit 00 -> -kDmrInnerDeviationHz
+//   dibit 01 -> -kDmrOuterDeviationHz (lowest)
+// (a Gray code across the four levels: each adjacent pair differs by
+// exactly one bit, as expected of a real, working 4FSK design - another
+// point in favor of this mapping being correct, not just plausible-looking).
+// Slicing threshold: g4klx/MMDVM's RX code uses 0.6 * (max level) as the
+// boundary between the inner and outer pair on each side of zero; applied
+// to our real-Hz deviation values rather than their internal fixed-point
+// scale, since this demodulator works in Hz throughout (see
+// DmrRfDemodulator.cpp / NbfmDemodulator.cpp's discriminator).
+inline constexpr double kDmrSliceThresholdHz = 0.6 * kDmrOuterDeviationHz; // 1166.4 Hz
+
 } // namespace biem::dsp::dmr
