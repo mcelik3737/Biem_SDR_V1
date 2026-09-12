@@ -51,10 +51,28 @@ if(PkgConfig_FOUND)
     pkg_check_modules(RTLSDR QUIET librtlsdr)
     if(RTLSDR_FOUND)
         set(BIEM_HAVE_RTLSDR TRUE)
-        message(STATUS "librtlsdr found -> live RTL-SDR hardware backend enabled")
     endif()
 endif()
+
 if(NOT BIEM_HAVE_RTLSDR)
+    # Fallback for setups without pkg-config at all (common on a plain
+    # Windows dev machine - vcpkg doesn't require pkg-config to be
+    # installed). vcpkg's toolchain file already adds
+    # installed/<triplet>/{include,lib} to CMake's default search paths,
+    # so a plain find_path/find_library works without pkg-config.
+    find_path(RTLSDR_INCLUDE_DIR NAMES rtl-sdr.h)
+    find_library(RTLSDR_LIBRARY NAMES rtlsdr librtlsdr)
+    if(RTLSDR_INCLUDE_DIR AND RTLSDR_LIBRARY)
+        set(BIEM_HAVE_RTLSDR TRUE)
+        set(RTLSDR_INCLUDE_DIRS "${RTLSDR_INCLUDE_DIR}")
+        set(RTLSDR_LIBRARIES "${RTLSDR_LIBRARY}")
+        set(RTLSDR_LIBRARY_DIRS "")
+    endif()
+endif()
+
+if(BIEM_HAVE_RTLSDR)
+    message(STATUS "librtlsdr found -> live RTL-SDR hardware backend enabled")
+else()
     message(STATUS "librtlsdr NOT found -> live RTL-SDR hardware backend SKIPPED (WavIqSource file/offline backend still built)")
 endif()
 
