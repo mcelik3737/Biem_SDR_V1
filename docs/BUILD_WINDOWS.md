@@ -17,9 +17,11 @@ sizin Windows makinenizde derleyip test etmeniz gerekecek.
    ```
 4. Bağımlılıkları vcpkg ile kurun:
    ```powershell
-   .\vcpkg\vcpkg install qt6-base qt6-multimedia sqlite3 rtl-sdr --triplet x64-windows
+   .\vcpkg\vcpkg install qt6-base qt6-multimedia sqlite3 rtlsdr --triplet x64-windows
    ```
-   - `rtl-sdr` paketi zaten sizin RTL-SDR/Realtek dongle'ınız için gereken
+   - vcpkg'deki paket adı **`rtlsdr`** (tiresiz) — `rtl-sdr` diye bir port
+     yok, denerseniz "does not exist" hatası alırsınız.
+   - `rtlsdr` paketi zaten sizin RTL-SDR/Realtek dongle'ınız için gereken
      `librtlsdr`'ı sağlar. SDRSharp kurulumunuzdaki Zadig/WinUSB sürücü
      ayarının bu paketle de uyumlu olması gerekir (aynı libusb tabanlı yol).
    - Qt6'yı isterseniz doğrudan Qt'nin resmi Windows yükleyicisiyle de
