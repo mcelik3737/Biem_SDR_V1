@@ -13,8 +13,18 @@ struct NbfmConfig {
     double iqSampleRateHz = 240000.0;         // IQ input sample rate from the SDR
     double audioSampleRateHz = 8000.0;        // PCM output sample rate
     double maxDeviationHz = 5000.0;           // NBFM peak deviation (~2.5 kHz @ 12.5 kHz spacing narrow, ~5 kHz @ 25 kHz - tune per channel)
-    double squelchThresholdDb = -50.0;        // relative to the IQ source's own power scale - needs calibrating per setup/gain, see class comment
+    double squelchThresholdDb = -50.0;        // relative to the filtered-channel power scale - needs calibrating per setup/gain, see class comment
     double deemphasisTimeConstantUs = 300.0;  // common land-mobile NBFM value; adjust if the target radios use a different standard
+
+    // Complex low-pass cutoff applied to the raw IQ samples BEFORE the FM
+    // discriminator, to reject energy outside the channel of interest
+    // (adjacent signals, wideband noise, the RTL-SDR's own DC spike at the
+    // tuned frequency). Without this, the discriminator sees the full
+    // capture bandwidth (iqSampleRateHz) and turns out-of-channel content
+    // into audio-band "click"/"crackle" artifacts - a well-known FM-demod
+    // failure mode, not a subtle one. Default matches half of a 12.5 kHz
+    // channel; halve it for 6.25 kHz spacing, double it for 25 kHz.
+    double channelHalfBandwidthHz = 6250.0;
 };
 
 // Classic quadrature FM discriminator for narrowband analog FM - the mode
@@ -25,13 +35,20 @@ struct NbfmConfig {
 // squelch is closed) plus squelch open/close edge events via the callbacks.
 //
 // Known simplifications (documented, not hidden):
-//  - Decimation is single-pole-IIR-filtered drop-sample, not a proper
-//    polyphase/FIR decimator. Fine for voice bandwidth NBFM; revisit if
-//    audio quality on real signals isn't good enough.
-//  - Squelch threshold is in the same arbitrary power units as whatever
-//    IqSource feeds it (RtlSdrSource normalizes to roughly [-1,1] per
-//    sample) - it WILL need calibrating against your actual dongle/gain
-//    settings and RF environment; there's no universal correct default.
+//  - The pre-discriminator channel filter and the post-discriminator
+//    decimation filter are both single-pole IIR, not a proper
+//    polyphase/FIR design. This is a real step up from having no
+//    pre-filter at all (see channelHalfBandwidthHz above), but a sharper
+//    filter may still be worth it if audio quality on real signals isn't
+//    good enough yet.
+//  - Squelch threshold is measured on the CHANNEL-FILTERED signal (as of
+//    the channelHalfBandwidthHz fix), in the same arbitrary power units as
+//    whatever IqSource feeds it (RtlSdrSource normalizes to roughly
+//    [-1,1] per sample) - it WILL need calibrating against your actual
+//    dongle/gain settings and RF environment; there's no universal
+//    correct default, and a threshold calibrated before this fix will
+//    read differently now (the filtered signal excludes out-of-channel
+//    power, so the noise floor reading should actually be lower/cleaner).
 class NbfmDemodulator {
 public:
     using AudioCallback = std::function<void(const int16_t* pcm, size_t count)>;
@@ -69,6 +86,11 @@ private:
     uint64_t levelSampleCounter_ = 0;
 
     IqSample prevSample_{0.0f, 0.0f};
+
+    // Pre-discriminator channel-select filter state (see
+    // channelHalfBandwidthHz).
+    double channelLpfAlpha_ = 1.0;
+    IqSample channelLpfState_{0.0f, 0.0f};
 
     double decimationRatio_ = 1.0;
     double decimationAccumulator_ = 0.0;

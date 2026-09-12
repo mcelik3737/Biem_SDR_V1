@@ -11,6 +11,8 @@ constexpr double kSquelchPowerAvgAlpha = 0.001; // ~ms-scale exponential average
 } // namespace
 
 NbfmDemodulator::NbfmDemodulator(NbfmConfig config) : config_(config) {
+    channelLpfAlpha_ = 1.0 - std::exp(-2.0 * kPi * config_.channelHalfBandwidthHz / config_.iqSampleRateHz);
+
     decimationRatio_ = config_.iqSampleRateHz / config_.audioSampleRateHz;
 
     double lpfCutoffHz = config_.audioSampleRateHz * 0.45; // just under the output Nyquist
@@ -40,8 +42,22 @@ void NbfmDemodulator::processSamples(const IqSample* samples, size_t count) {
     for (size_t i = 0; i < count; ++i) {
         const IqSample& s = samples[i];
 
-        // --- squelch: exponential moving average of instantaneous power ---
-        double instPower = static_cast<double>(s.real()) * s.real() + static_cast<double>(s.imag()) * s.imag();
+        // --- channel-select filter (BEFORE the discriminator - see class
+        // comment on channelHalfBandwidthHz for why this has to come
+        // first, not after) ---
+        channelLpfState_ = IqSample(
+            channelLpfState_.real() +
+                static_cast<float>(channelLpfAlpha_) * (s.real() - channelLpfState_.real()),
+            channelLpfState_.imag() +
+                static_cast<float>(channelLpfAlpha_) * (s.imag() - channelLpfState_.imag()));
+        const IqSample& filtered = channelLpfState_;
+
+        // --- squelch: exponential moving average of the FILTERED signal's
+        // power, so a strong out-of-channel signal or the tuner's own DC
+        // spike can't hold squelch open (or mask a real in-channel signal)
+        // by itself ---
+        double instPower =
+            static_cast<double>(filtered.real()) * filtered.real() + static_cast<double>(filtered.imag()) * filtered.imag();
         squelchPowerAvg_ += kSquelchPowerAvgAlpha * (instPower - squelchPowerAvg_);
         double powerDb = 10.0 * std::log10(std::max(squelchPowerAvg_, 1e-12));
         bool newSquelchOpen = powerDb > config_.squelchThresholdDb;
@@ -58,7 +74,7 @@ void NbfmDemodulator::processSamples(const IqSample* samples, size_t count) {
         }
 
         // --- FM discriminator (instantaneous frequency, normalized to ~[-1,1]) ---
-        double freqRadPerSample = discriminate(s);
+        double freqRadPerSample = discriminate(filtered);
         double freqHz = freqRadPerSample * (config_.iqSampleRateHz / (2.0 * kPi));
         double audioSample = freqHz / config_.maxDeviationHz;
 
