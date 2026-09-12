@@ -228,6 +228,71 @@ void testDmrRfLocksWithMixerOffset() {
     }
 }
 
+// Regression test for a real-world finding (see the commit message): a
+// lone simplex DMR radio using only ONE of the two 30ms TDMA slots leaves
+// the OTHER slot's window truly RF-silent throughout an otherwise
+// continuous transmission, so real consecutive bursts are a full 60ms
+// (576 bits) apart in wall-clock/sample terms, not the 264 bits
+// BurstAligner's two-sync check requires. This models that directly: a
+// real ~30ms (144-symbol, i.e. exactly one slot - a whole number of
+// symbols, matching how DMR's own timing grid is actually laid out) gap
+// of near-silence is spliced between two real bursts, fed to
+// processSamples() as a SEPARATE call (exercising the "call repeatedly,
+// state persists across calls" contract too) - confirms the receiver
+// still locks and correctly recovers the second burst despite the gap.
+void testDmrRfLocksAcrossSingleSlotTdmaGap() {
+    const double iqRate = 240000.0;
+
+    std::vector<uint8_t> preambleBits;
+    for (int i = 0; i < 400; ++i) {
+        int bitPos = 7 - (i % 8);
+        preambleBits.push_back(static_cast<uint8_t>((0xDD >> bitPos) & 1u));
+    }
+    auto burst1Bits = makeSyntheticBurstBits(SyncType::BsSourcedVoice, 0x88);
+    auto burst2Bits = makeSyntheticBurstBits(SyncType::BsSourcedData, 0xC9);
+
+    std::vector<uint8_t> segmentABits; // preamble + burst1 (the verification reference)
+    segmentABits.insert(segmentABits.end(), preambleBits.begin(), preambleBits.end());
+    segmentABits.insert(segmentABits.end(), burst1Bits.begin(), burst1Bits.end());
+
+    auto devsA = bitsToSymbolDeviationsHz(segmentABits);
+    auto devsB = bitsToSymbolDeviationsHz(burst2Bits);
+    auto srcA = WavIqSource::makeSyntheticFsk(devsA, kDmrSymbolRateHz, iqRate, 0.0, /*noiseAmplitude=*/0.02);
+    auto srcB = WavIqSource::makeSyntheticFsk(devsB, kDmrSymbolRateHz, iqRate, 0.0, /*noiseAmplitude=*/0.02);
+
+    DmrRfConfig cfg;
+    cfg.iqSampleRateHz = iqRate;
+    cfg.squelchThresholdDb = -60.0;
+    DmrRfDemodulator demod(cfg);
+
+    std::vector<ReceivedBurst> received;
+    demod.setBurstCallback([&](const DmrBurstBytes& b, SyncType t) { received.push_back({b, t}); });
+
+    srcA.start([&](const IqSample* samples, size_t count) { demod.processSamples(samples, count); });
+
+    // Exactly one 30ms slot (144 symbols * 50 samples/symbol = 7200
+    // samples) of near-silence - a whole number of symbol periods, same
+    // as DMR's own timing grid, so this doesn't (and shouldn't) disturb
+    // the phase relationship acquisition depends on. Amplitude must sit
+    // CLEARLY below the -60 dB squelch threshold, not near it - 0.001
+    // amplitude is exactly -60dB (0.001^2 = 1e-6, 10*log10(1e-6)=-60),
+    // right on the boundary, which let squelch flicker open during the
+    // "gap" in an earlier version of this test and silently defeated the
+    // whole point (gap samples leaking into the aligner instead of being
+    // skipped).
+    std::vector<IqSample> gap(7200, IqSample(0.0f, 0.0f));
+    demod.processSamples(gap.data(), gap.size());
+
+    srcB.start([&](const IqSample* samples, size_t count) { demod.processSamples(samples, count); });
+
+    BIEM_CHECK(demod.locked());
+    BIEM_CHECK(received.size() == 1); // burst2 - burst1 was consumed as the verification reference
+    if (received.size() == 1) {
+        BIEM_CHECK(received[0].type == SyncType::BsSourcedData);
+        BIEM_CHECK(hammingDistance(received[0].bytes, packReference(burst2Bits)) <= kMaxAllowedBitErrors);
+    }
+}
+
 void testDmrRfDoesNotFalseLockOnNoise() {
     // Full-amplitude random noise (not tiny/squelched-out) for long enough
     // that squelch genuinely opens and the acquisition logic actually runs
@@ -385,6 +450,7 @@ void testDmrRfFullStackReliabilityIsBoundedAndNonZero() {
 int main() {
     testDmrRfLocksAndRecoversBursts();
     testDmrRfLocksWithMixerOffset();
+    testDmrRfLocksAcrossSingleSlotTdmaGap();
     testDmrRfDoesNotFalseLockOnNoise();
     testDmrRfFullStackCanDecodeCorrectly();
     testDmrRfFullStackReliabilityIsBoundedAndNonZero();

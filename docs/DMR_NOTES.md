@@ -191,22 +191,67 @@ gösterildi. **Gerçek RTL-SDR donanımıyla, gerçek bir DMR el telsizinden
   zincirinin gerçek donanımda çalıştığının ilk kanıtı.
 - Golay-decode edilen renk kodu (1) radyonun GERÇEK ayarıyla (Color Code 1)
   birebir eşleşti - tesadüf olamayacak kadar isabetli bir doğrulama.
-- **Gerçek bulgu, kod düzeltildi**: squelch, gerçek bir sürekli PTT
-  boyunca bile onlarca kez ACIK/kapali arasında çırpınıyordu - tek slotlu
-  simplex bir DMR radyosu, TDMA'nın diğer slotunun ~30ms'lik boş
-  penceresinde RF'i fiziksel olarak KESİYOR. `resetAcquisition()` eskiden
-  HER squelch açılışında çağrılıyordu, yani bu her ~30ms'de bir birikmiş
-  iki-senkron-doğrulama ilerlemesini siliyordu. Düzeltme: artık sadece
-  gerçekten uzun (>150ms) bir sessizlikten sonra sıfırlanıyor, VE sembol
-  işleme artık squelch durumuna hiç bakmıyor (kapalıyken de işliyor - saf
-  gürültü üzerinde sahte kilitlenmeye yol açmadığı zaten kanıtlanmıştı,
-  bkz. `testDmrRfDoesNotFalseLockOnNoise`).
-- Yakalanan burst `MultiBlockControlHeader` olarak çözüldü ama Golay
-  `correctedBits=-1` (düzeltilemedi/güvenilmez) - kısa bir PTT'de tam
-  çağrı başlığını (VoiceLcHeader) değil başka bir burst'ü yakalamış
-  olabiliriz. Bir sonraki test: yukarıdaki düzeltmeyle, uzun bir PTT
-  basışında gerçek bir `VoiceLcHeader` + çağrı başlangıcı yakalanıp
-  yakalanmadığı.
+- **Gerçek bulgu**: squelch, gerçek bir sürekli PTT boyunca bile onlarca
+  kez ACIK/kapali arasında çırpınıyordu - tek slotlu simplex bir DMR
+  radyosu, TDMA'nın diğer slotunun ~30ms'lik boş penceresinde RF'i
+  fiziksel olarak KESİYOR (bu kısım doğru teşhis edildi ve hâlâ geçerli).
+  Bunu düzeltme çabası üç denemede tamamlandı - ilk ikisi YANLIŞTI ve
+  bilerek burada kayıtlı tutuluyor ki aynı hata tekrar denenmesin:
+
+  1. **İlk deneme (commit `e488689`, HATALIYDI, sonradan geçersiz
+     kılındı)**: `resetAcquisition()` sadece gerçekten uzun (>150ms) bir
+     sessizlikten sonra çağrılacak şekilde düzeltildi - AMA bununla
+     birlikte sembol işleme squelch durumuna HİÇ bakmayacak şekilde
+     değiştirildi (kapı tamamen kaldırıldı). Bu yanlıştı: tek slotlu
+     sinyalde boş TDMA penceresi sırasında da ham gürültü bitleri
+     `BurstAligner`'ın bit sayacına/geçmişine eklenmeye devam ediyor -
+     bu da bir sonraki gerçek senkronun beklenen konumunu kaydırıyor,
+     yani iki gerçek senkron artık tam 264 bit arayla asla bulunamıyor
+     ve kilit HİÇBİR ZAMAN oluşmuyor. Yeni bir regresyon testi
+     (`testDmrRfLocksAcrossSingleSlotTdmaGap`, tam bu senaryoyu
+     sentetik olarak üretiyor) bunu yakaladı - test başarısız oldu,
+     `e488689`'un yanlış olduğunu kanıtladı.
+     **Bağımsız gerçek donanım doğrulaması** (2026-09-12, Windows/MSVC
+     derlemesi, hâlâ `e488689` üzerindeyken): kullanıcı 427.500 MHz'de
+     tekrar test etti - güçlü, temiz bir sinyal alınmasına rağmen
+     (`-2` ile `-6 dB` arası güç okumaları, arka plan `-27`/`-48 dB`)
+     `kilit: yok` durumu TÜM oturum boyunca hiç değişmedi. Bu, testin
+     sentetik olarak öngördüğü tam senaryoyla birebir örtüşüyor -
+     regresyon testi gerçek donanımdaki gerçek bir arızayı doğru
+     yakalamış.
+  2. **İkinci deneme**: squelch kapısını olduğu gibi geri eklemek
+     (`if (!squelchOpen_) continue;`) de yetmedi. Teşhis (geçici bir
+     debug harness ile): mevcut squelch takipçisi YAVAŞ bir EMA
+     (`alpha=0.001`, ~1000 örnek/~4.2ms zaman sabiti) - 30ms/7200
+     örneklik bir TDMA boşluğu içinde YERLEŞEMİYOR (gerçekten sessiz
+     bir pencere boyunca bile squelch "açık" kaldığı gösterildi), yani
+     bu takipçiye göre kapılamak boşluğu hiç filtrelemiyordu.
+  3. **Kalıcı düzeltme**: iki AYRI güç takipçisi:
+     - `squelchPowerAvg_`/`squelchOpen_`: DEĞİŞMEDİ - hâlâ yavaş EMA,
+       hâlâ sadece genel/çağrı-sınırı amaçlı public callback için.
+     - YENİ `fastPowerAvg_`/`fastGateOpen_` (`alpha=0.25`, ~4 örnek
+       zaman sabiti): SADECE sembol işlemeyi iç olarak kapılamak için -
+       TDMA boşluğunu gerçekten fark edebilecek kadar hızlı.
+     - `kSyncPositionToleranceBits=8` (`DmrConstants.h`) eklendi: hızlı
+       kapı bile sinyal bittiğini fark etmeden önce birkaç örnek
+       gecikiyor (birkaç bit sızıntısı) - senkron pozisyon doğrulama
+       kontrollerine (`BurstAligner::pushBit`) küçük bir tolerans
+       eklendi. Burst çıkarma zaten gerçek bulunan senkron pozisyonuna
+       göre çapalanıyor, bu yüzden bu tolerans sadece doğrulamayı
+       etkiliyor, içerik hizalamasını değil.
+     - Doğrulama: `testDmrRfLocksAcrossSingleSlotTdmaGap` geçti, tam
+       test paketi geçti (5/5, `ctest`), 10 farklı RNG seed'iyle
+       gürültü-reddi testi tekrar doğrulandı (yanlış kilitlenme riski
+       hâlâ ihmal edilebilir - tolerans eklemek bunu ölçülebilir
+       şekilde zayıflatmadı), `-Wall -Wextra -Wpedantic -Wshadow`
+       temiz, `biem_cli dmr-demo` regresyon kontrolü geçti
+       (`locked=1`).
+- Yakalanan burst (ilk testte, hâlâ `e488689` öncesi/orijinal kilitte)
+  `MultiBlockControlHeader` olarak çözüldü ama Golay `correctedBits=-1`
+  (düzeltilemedi/güvenilmez) - kısa bir PTT'de tam çağrı başlığını
+  (VoiceLcHeader) değil başka bir burst'ü yakalamış olabiliriz. Bir
+  sonraki test: yukarıdaki kalıcı düzeltmeyle, uzun bir PTT basışında
+  gerçek bir `VoiceLcHeader` + çağrı başlangıcı yakalanıp yakalanmadığı.
 
 **Slot 1/2 ayrımı**: `DmrRfDemodulator` burst'leri sadece VARIŞ SIRASINA
 göre raporluyor, hangi fiziksel TDMA slotuna ait olduğunu bilmiyor (gerçek

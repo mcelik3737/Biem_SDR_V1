@@ -76,12 +76,36 @@ struct DmrRfConfig {
 // transmission is consumed purely as the verification reference and is
 // never itself reported (one burst, ~27.5 ms, of extra acquisition
 // latency) - a normal, expected trade-off for this kind of synchronizer,
-// not a bug. Once verified, that phase stays locked in for the remainder
-// of this squelch-open period, and a sync landing somewhere other than
-// its expected next position drops the lock and starts fresh
-// verification. Squelch closing and reopening (i.e. a new burst of RF
-// energy) also resets acquisition, since the sample-timing relationship
-// may have changed during the silence.
+// not a bug. Once verified, that phase stays locked in indefinitely, and
+// a sync landing somewhere other than its expected next position drops
+// the lock and starts fresh verification.
+//
+// Symbol decisions only happen while a FAST internal power gate is open
+// (see fastPowerAvg_ - NOT the same as the public, slow squelch below) -
+// this is NOT just an efficiency skip, it's load-bearing: a DMR TDMA
+// frame is 60ms (two 30ms slots) but a burst is only ~27.5ms, so a lone
+// simplex radio using only slot 1 leaves slot 2's entire 30ms window
+// truly RF-silent, and real consecutive bursts from it are a full 60ms
+// (576 bits at this symbol rate) apart in absolute time - NOT the
+// kBurstTotalBits (264) the two-sync check above requires. Skipping
+// symbol decisions while the fast gate is closed is what reconciles
+// this: the idle slot's dead time contributes zero bits to
+// BurstAligner's count, so consecutive slot-1 bursts still land exactly
+// 264 bits apart from its point of view no matter how much real silence
+// separates them. A real repeater using both slots continuously never
+// hits this gap at all. The gate needs to be FAST (not the same slow
+// tracker the public squelch uses) because a single-slot gap is only
+// ~7200 samples - the slow tracker's ~1000-sample time constant can't
+// settle within that window and would stay "open" straight through it,
+// which is exactly how an earlier version of this fix (gating on the
+// slow squelch instead) failed. The fast gate reopening after a SHORT
+// closed period (one idle-slot's worth) does NOT reset acquisition for
+// the same reason - only reopening after a genuinely long silence does
+// (see minSilenceForReacquireSamples_ in the .cpp), since a brief
+// single-slot gap must not cost accumulated verification progress. The
+// public squelch (squelchOpen()/setSquelchCallback()) is unaffected by
+// any of this - it keeps its original slow, call-boundary-timescale
+// behavior throughout.
 //
 // Known simplifications (same spirit as NbfmDemodulator's own list):
 //  - Symbol decisions use the single raw sample at the recovered phase
@@ -151,14 +175,38 @@ private:
     double channelLpfAlpha_ = 1.0;
     IqSample channelLpfState_{0.0f, 0.0f};
 
+    // Slow power tracker - unchanged meaning/purpose from the first
+    // version of this class: drives the PUBLIC squelchOpen()/
+    // setSquelchCallback() surface, on a call-boundary timescale (matches
+    // NbfmDemodulator's squelch, and callers like biem_cli.cpp that
+    // signal call start/end from it). Deliberately NOT used to gate
+    // symbol-level processing below - see fastGateOpen_'s comment for why
+    // that needs a much faster tracker instead.
     double squelchPowerAvg_ = 0.0;
     bool squelchOpen_ = false;
-    // Consecutive samples squelch has been closed - see processSamples():
-    // acquisition only resets on reopen after a genuinely long silence
-    // (kMinSilenceForReacquireSamples), not on every brief flap (real
-    // finding: a lone simplex DMR radio using only one TDMA slot leaves
+
+    // Fast power tracker - gates symbol-level processing (see
+    // processSamples()). A real finding drove this split into two
+    // trackers: a lone simplex DMR radio using only one TDMA slot leaves
     // the OTHER slot's ~30ms window RF-silent throughout an otherwise
-    // continuous transmission).
+    // continuous transmission, but the SLOW tracker above (tuned for
+    // human-speech-timescale call boundaries, correct for that purpose)
+    // has a time constant of roughly 1000 samples - it CANNOT settle
+    // within a single ~7200-sample/30ms slot window, so it stays
+    // "open" (or hovers ambiguously) straight through a real gap instead
+    // of ever reading "closed". Gating symbol decisions on it therefore
+    // let the idle slot's silence leak into BurstAligner as real bits,
+    // corrupting the exact bit-spacing two-sync verification depends on.
+    // This tracker is fast enough (~50-sample time constant, 100+ time
+    // constants within one 30ms slot) to track the true on/off envelope
+    // of a single-slot signal accurately.
+    double fastPowerAvg_ = 0.0;
+    bool fastGateOpen_ = false;
+
+    // Consecutive samples the FAST gate has been closed - see
+    // processSamples(): acquisition only resets on reopen after a
+    // genuinely long silence (minSilenceForReacquireSamples_), not on
+    // every brief single-slot gap (see fastGateOpen_'s comment).
     uint64_t closedSampleCount_ = 0;
     uint64_t minSilenceForReacquireSamples_ = 0; // set in constructor from iqSampleRateHz
 

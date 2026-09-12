@@ -12,6 +12,19 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kSquelchPowerAvgAlpha = 0.001; // same as NbfmDemodulator - ~ms-scale exponential average
 constexpr double kCenterEmaAlpha = 0.001;       // slow - tracks residual freq offset, not symbol content
+// Fast gate for symbol-level processing - see fastPowerAvg_'s header
+// comment for why this needs to be much faster than kSquelchPowerAvgAlpha.
+// Needs to be fast enough that the lag between a real signal actually
+// ending and this noticing (a 60dB EMA transition takes roughly
+// 13.8 time constants) stays well under one symbol period (50 samples at
+// the live iqSampleRateHz) - a slower gate leaks a few trailing "garbage"
+// bits from the decaying tail into BurstAligner right after a real
+// burst, which is exactly the kind of small bit-position slop
+// BurstAligner's kSyncPositionToleranceBits (DmrConstants.h) exists to
+// absorb, but there's no reason to lean on that tolerance more than
+// necessary. Time constant 1/0.25 = 4 samples -> 60dB settles in ~55
+// samples, close to one symbol period.
+constexpr double kFastGatePowerAvgAlpha = 0.25;
 
 // Packs exactly kBurstTotalBits (264) 0/1 values, oldest-first, into a
 // 33-byte DmrBurstBytes, MSB-first within each byte - matches the
@@ -113,19 +126,26 @@ struct DmrRfDemodulator::BurstAligner {
 
         if (syncFiredThisBit) {
             int64_t thisSyncPos = bitCounter - 1; // position of the bit just pushed
-            if (verified && thisSyncPos == nextExpectedSyncBitPos) {
-                // Still locked: this burst's sync landed exactly where
-                // expected. Arm extraction of THIS burst and schedule
-                // where the next one must land.
+            // Both comparisons below allow a small slop
+            // (kSyncPositionToleranceBits - see DmrConstants.h for why:
+            // short of it, extraction still anchors to thisSyncPos - the
+            // ACTUAL detected position - so a real signal is unaffected
+            // by its own past slop, only this check needed the room).
+            if (verified && std::abs(thisSyncPos - nextExpectedSyncBitPos) <= kSyncPositionToleranceBits) {
+                // Still locked: this burst's sync landed where expected
+                // (within tolerance). Arm extraction of THIS burst and
+                // schedule where the next one must land, based on where
+                // THIS one actually was (self-correcting, not drifting
+                // from a purely theoretical fixed grid).
                 nextExpectedSyncBitPos = thisSyncPos + kBurstTotalBits;
                 pendingCountdown = kBurstBitsAfterSync;
                 pendingType = firedType;
             } else if (!verified && lastSyncBitPos >= 0 &&
-                       thisSyncPos - lastSyncBitPos == kBurstTotalBits) {
-                // Two syncs exactly one burst-length apart: confirmed.
-                // The burst that just confirmed (not the earlier
-                // candidate, which has already scrolled out of history)
-                // is the first one actually extracted.
+                       std::abs(thisSyncPos - lastSyncBitPos - kBurstTotalBits) <= kSyncPositionToleranceBits) {
+                // Two syncs one burst-length apart (within tolerance):
+                // confirmed. The burst that just confirmed (not the
+                // earlier candidate, which has already scrolled out of
+                // history) is the first one actually extracted.
                 verified = true;
                 nextExpectedSyncBitPos = thisSyncPos + kBurstTotalBits;
                 pendingCountdown = kBurstBitsAfterSync;
@@ -233,7 +253,9 @@ void DmrRfDemodulator::processSamples(const IqSample* samples, size_t count) {
                 static_cast<float>(channelLpfAlpha_) * (mixed.imag() - channelLpfState_.imag()));
         const IqSample& filtered = channelLpfState_;
 
-        // --- squelch (identical approach to NbfmDemodulator) ---
+        // --- squelch (SLOW - public callback / call-boundary semantics
+        // only, identical approach to NbfmDemodulator; deliberately does
+        // NOT gate anything below - see fastPowerAvg_'s header comment) ---
         double instPower = static_cast<double>(filtered.real()) * filtered.real() +
                             static_cast<double>(filtered.imag()) * filtered.imag();
         squelchPowerAvg_ += kSquelchPowerAvgAlpha * (instPower - squelchPowerAvg_);
@@ -242,29 +264,40 @@ void DmrRfDemodulator::processSamples(const IqSample* samples, size_t count) {
         if (newSquelchOpen != squelchOpen_) {
             squelchOpen_ = newSquelchOpen;
             if (squelchCb_) squelchCb_(squelchOpen_);
-            if (squelchOpen_) {
+        }
+
+        // --- fast gate (internal only - see fastPowerAvg_'s header
+        // comment for why symbol processing needs this instead of the
+        // slow squelch above) ---
+        fastPowerAvg_ += kFastGatePowerAvgAlpha * (instPower - fastPowerAvg_);
+        double fastPowerDb = 10.0 * std::log10(std::max(fastPowerAvg_, 1e-12));
+        bool newFastGateOpen = fastPowerDb > config_.squelchThresholdDb;
+        if (newFastGateOpen != fastGateOpen_) {
+            fastGateOpen_ = newFastGateOpen;
+            if (fastGateOpen_) {
                 // Only re-acquire if the RF was genuinely gone for a
-                // while (kMinSilenceForReacquireSamples) - NOT on every
-                // reopen. Real-world finding (see the commit message): a
-                // lone simplex DMR radio transmitting on only one TDMA
-                // slot leaves the OTHER slot's ~30ms window truly RF-
-                // silent throughout an otherwise continuous PTT hold, so
-                // squelch legitimately flaps open/closed every ~30ms
-                // during perfectly normal reception - resetting
-                // acquisition on every one of those flaps (the original
-                // behavior) discarded verification progress almost as
-                // fast as it was made, since two-sync confirmation needs
-                // the SAME phase's history to survive across one full
-                // burst (see BurstAligner). A real new transmission's
-                // squelch-closed gap is far longer than one slot period,
-                // so this threshold still resets for that case.
+                // while (closedSampleCount_ past
+                // minSilenceForReacquireSamples_) - NOT on every reopen.
+                // A lone simplex DMR radio transmitting on only one TDMA
+                // slot leaves the OTHER slot's ~30ms window truly
+                // RF-silent throughout an otherwise continuous PTT hold,
+                // so this fast gate legitimately closes every ~30ms
+                // during perfectly normal reception (that's the whole
+                // point of tracking it fast enough to notice) - resetting
+                // acquisition on every one of those flaps discarded
+                // verification progress almost as fast as it was made,
+                // since two-sync confirmation needs the SAME phase's
+                // history to survive across one full burst (see
+                // BurstAligner). A real new transmission's gap is far
+                // longer than one slot period, so this threshold still
+                // resets for that case.
                 if (closedSampleCount_ >= minSilenceForReacquireSamples_) {
                     resetAcquisition();
                 }
             }
             closedSampleCount_ = 0;
         }
-        if (!squelchOpen_) ++closedSampleCount_;
+        if (!fastGateOpen_) ++closedSampleCount_;
 
         if (levelCb_ && levelReportInterval_ != 0) {
             if (++levelSampleCounter_ >= levelReportInterval_) {
@@ -288,14 +321,31 @@ void DmrRfDemodulator::processSamples(const IqSample* samples, size_t count) {
         centerEma_ += kCenterEmaAlpha * (smoothedFreqHz - centerEma_);
 
         uint64_t idx = sampleIndex_++;
-        // NOTE: deliberately NOT gated on squelchOpen_ - a real finding
-        // (see the squelch-reopen comment above) is that a legitimate,
-        // continuous transmission can itself flap squelch every ~30ms (a
-        // lone simplex radio using only one TDMA slot), so skipping
-        // symbol decisions while "closed" would throw away real signal
-        // mid-transmission, not just silence. Processing through actual
-        // silence/noise is safe - testDmrRfDoesNotFalseLockOnNoise proves
-        // a full second of it never produces a false lock.
+        // Gating on the FAST gate here is INTENTIONAL and load-bearing,
+        // not just an efficiency skip - see fastPowerAvg_'s header
+        // comment for the real-world case this interacts with (and for
+        // why the slow, public squelch above is deliberately NOT used
+        // for this). Short version: a DMR TDMA frame is 60ms (two 30ms
+        // slots) but a burst is only ~27.5ms; a lone simplex radio using
+        // only slot 1 leaves slot 2's entire 30ms silent, so consecutive
+        // REAL bursts are a full 60ms (576 bits at this symbol rate)
+        // apart in absolute time, NOT the 264 bits BurstAligner's
+        // two-sync verification requires. Skipping symbol decisions while
+        // the fast gate is closed is what makes this work anyway: it
+        // means the idle slot's dead time contributes ZERO bits to
+        // BurstAligner's count, so consecutive slot-1 bursts still land
+        // exactly kBurstTotalBits apart from the aligner's point of view,
+        // regardless of how much real wall-clock silence separates them.
+        // (Two earlier versions of this fix got this wrong in opposite
+        // ways: one removed gating entirely - reasoning that processing
+        // through silence is safe against false locks, which is true but
+        // misses that this gate isn't about false locks, it's about not
+        // corrupting real bursts' bit-spacing with dead-time bits: the
+        // other kept gating but on the SLOW squelch tracker, whose
+        // ~1000-sample time constant can't settle within one 7200-sample/
+        // 30ms slot, so it never actually reads "closed" for a
+        // single-slot gap and the dead time leaked through anyway.)
+        if (!fastGateOpen_) continue;
 
         int phase = static_cast<int>(idx % static_cast<uint64_t>(samplesPerSymbol_));
         double centered = smoothedFreqHz - centerEma_;

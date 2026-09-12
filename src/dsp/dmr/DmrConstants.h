@@ -103,6 +103,24 @@ inline constexpr int kBurstTotalBits = 264;
 inline constexpr int kBurstSyncStartBit = 108;  // 0-indexed bit position where SYNC begins
 inline constexpr int kBurstBitsAfterSync = kBurstTotalBits - kBurstSyncStartBit - kSyncPatternBits; // 108
 
+// How many bits DmrRfDemodulator's BurstAligner tolerates a sync landing
+// away from its exact expected next position (start-of-transmission
+// verification and staying-locked position checks both use this - see
+// DmrRfDemodulator.cpp) before treating it as a mismatch. Not spec-derived
+// - a real, small effect this needs to absorb: any real-world power gate
+// used to skip an idle TDMA slot's dead time (see DmrRfDemodulator.h's
+// fastPowerAvg_) has SOME decay lag between the real signal ending and
+// the gate noticing, during which a handful of trailing bits leak through
+// as if real. Burst extraction itself is unaffected (it always anchors
+// to wherever the sync was actually found, not a theoretical exact
+// position), so this tolerance only needs to cover verification, not
+// content alignment. Kept small relative to kBurstTotalBits (264) so it
+// stays far tighter than chance - even combined with
+// kSyncMaxHammingDistance's own tolerance on the sync match itself, this
+// is nowhere near loose enough to meaningfully raise the false-lock risk
+// tests/test_dmr_rf.cpp's noise test guards against.
+inline constexpr int kSyncPositionToleranceBits = 8;
+
 // --- 4FSK physical layer (symbol rate, deviation, slicing threshold) -----
 // Symbol rate: CONFIRMED by general DMR reference (lyonscomputer.com.au
 // DMR-Signal-Processing-Notes): 4800 symbols/sec, 2 bits/symbol.
