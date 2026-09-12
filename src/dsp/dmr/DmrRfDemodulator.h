@@ -153,6 +153,14 @@ private:
 
     double squelchPowerAvg_ = 0.0;
     bool squelchOpen_ = false;
+    // Consecutive samples squelch has been closed - see processSamples():
+    // acquisition only resets on reopen after a genuinely long silence
+    // (kMinSilenceForReacquireSamples), not on every brief flap (real
+    // finding: a lone simplex DMR radio using only one TDMA slot leaves
+    // the OTHER slot's ~30ms window RF-silent throughout an otherwise
+    // continuous transmission).
+    uint64_t closedSampleCount_ = 0;
+    uint64_t minSilenceForReacquireSamples_ = 0; // set in constructor from iqSampleRateHz
 
     // Slow-tracked center of the (boxcar-smoothed) discriminator output,
     // subtracted before slicing - absorbs small residual Tx/Rx frequency

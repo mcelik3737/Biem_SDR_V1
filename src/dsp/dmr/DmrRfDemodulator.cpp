@@ -176,6 +176,10 @@ DmrRfDemodulator::DmrRfDemodulator(DmrRfConfig config) : config_(config) {
     // that particular bug.
     boxcarWindow_ = std::max(1, samplesPerSymbol_ / 2);
     boxcarBuf_.assign(static_cast<size_t>(boxcarWindow_), 0.0);
+    // 150 ms: comfortably longer than one TDMA slot's ~30ms silent half
+    // (see processSamples()'s squelch-reopen comment) but much shorter
+    // than a real gap between separate transmissions.
+    minSilenceForReacquireSamples_ = static_cast<uint64_t>(0.15 * config_.iqSampleRateHz);
     resetAcquisition();
 }
 
@@ -239,13 +243,28 @@ void DmrRfDemodulator::processSamples(const IqSample* samples, size_t count) {
             squelchOpen_ = newSquelchOpen;
             if (squelchCb_) squelchCb_(squelchOpen_);
             if (squelchOpen_) {
-                // A fresh burst of RF energy: the sample-timing
-                // relationship to the transmitter may have changed during
-                // the preceding silence, so re-acquire from scratch
-                // rather than trusting a stale lock.
-                resetAcquisition();
+                // Only re-acquire if the RF was genuinely gone for a
+                // while (kMinSilenceForReacquireSamples) - NOT on every
+                // reopen. Real-world finding (see the commit message): a
+                // lone simplex DMR radio transmitting on only one TDMA
+                // slot leaves the OTHER slot's ~30ms window truly RF-
+                // silent throughout an otherwise continuous PTT hold, so
+                // squelch legitimately flaps open/closed every ~30ms
+                // during perfectly normal reception - resetting
+                // acquisition on every one of those flaps (the original
+                // behavior) discarded verification progress almost as
+                // fast as it was made, since two-sync confirmation needs
+                // the SAME phase's history to survive across one full
+                // burst (see BurstAligner). A real new transmission's
+                // squelch-closed gap is far longer than one slot period,
+                // so this threshold still resets for that case.
+                if (closedSampleCount_ >= minSilenceForReacquireSamples_) {
+                    resetAcquisition();
+                }
             }
+            closedSampleCount_ = 0;
         }
+        if (!squelchOpen_) ++closedSampleCount_;
 
         if (levelCb_ && levelReportInterval_ != 0) {
             if (++levelSampleCounter_ >= levelReportInterval_) {
@@ -269,7 +288,14 @@ void DmrRfDemodulator::processSamples(const IqSample* samples, size_t count) {
         centerEma_ += kCenterEmaAlpha * (smoothedFreqHz - centerEma_);
 
         uint64_t idx = sampleIndex_++;
-        if (!squelchOpen_) continue; // nothing to decide while the channel appears empty
+        // NOTE: deliberately NOT gated on squelchOpen_ - a real finding
+        // (see the squelch-reopen comment above) is that a legitimate,
+        // continuous transmission can itself flap squelch every ~30ms (a
+        // lone simplex radio using only one TDMA slot), so skipping
+        // symbol decisions while "closed" would throw away real signal
+        // mid-transmission, not just silence. Processing through actual
+        // silence/noise is safe - testDmrRfDoesNotFalseLockOnNoise proves
+        // a full second of it never produces a false lock.
 
         int phase = static_cast<int>(idx % static_cast<uint64_t>(samplesPerSymbol_));
         double centered = smoothedFreqHz - centerEma_;

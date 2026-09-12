@@ -180,14 +180,33 @@ iddiasında bulunmuyor. Gerçek düzeltme gerçek bir eşlenmiş filtre ve/veya
 daha iyi sembol zamanlama takibi gerektirir - bkz. yukarıdaki "Nasıl
 ilerlenir" madde 4.
 
-**Doğrulama durumu**: tamamen sentetik (gerçek DMR sinyaline benzeyen ama
-gerçek olmayan, dikdörtgen darbe şekilli 4FSK test sinyali - `WavIqSource::
-makeSyntheticFsk` + `dsp/dmr/DmrSyntheticSource.h`) - `biem_cli dmr-demo`
-ile uçtan uca (encode → 4FSK → demod → Slot Type/BPTC/LC decode →
-CallRecorder → SQLite → arama) çalıştığı gösterildi. **Gerçek RTL-SDR
-donanımıyla, gerçek bir DMR sinyaliyle HENÜZ test edilmedi** - `biem_cli
-dmr-live` bunun için hazır ama kullanıcının gerçek bir DMR vericisine
-erişimi olduğunda doğrulanmalı.
+**Doğrulama durumu**: sentetik testler (`WavIqSource::makeSyntheticFsk` +
+`dsp/dmr/DmrSyntheticSource.h`, `biem_cli dmr-demo`) uçtan uca çalıştığı
+gösterildi. **Gerçek RTL-SDR donanımıyla, gerçek bir DMR el telsizinden
+(427.500 MHz, Color Code 1, simplex) ilk gerçek test yapıldı**:
+- Güçlü, temiz bir sinyal alındı (arka plan -30/-50 dB iken sinyal
+  -2/-3 dB'ye çıktı - analog testten bile daha net bir S/N).
+- **Gerçek havadan gerçek bir kilit elde edildi** (iki gerçek senkron
+  kelimesi tam 264 bit arayla bulundu) - 4FSK demod + zamanlama kurtarma
+  zincirinin gerçek donanımda çalıştığının ilk kanıtı.
+- Golay-decode edilen renk kodu (1) radyonun GERÇEK ayarıyla (Color Code 1)
+  birebir eşleşti - tesadüf olamayacak kadar isabetli bir doğrulama.
+- **Gerçek bulgu, kod düzeltildi**: squelch, gerçek bir sürekli PTT
+  boyunca bile onlarca kez ACIK/kapali arasında çırpınıyordu - tek slotlu
+  simplex bir DMR radyosu, TDMA'nın diğer slotunun ~30ms'lik boş
+  penceresinde RF'i fiziksel olarak KESİYOR. `resetAcquisition()` eskiden
+  HER squelch açılışında çağrılıyordu, yani bu her ~30ms'de bir birikmiş
+  iki-senkron-doğrulama ilerlemesini siliyordu. Düzeltme: artık sadece
+  gerçekten uzun (>150ms) bir sessizlikten sonra sıfırlanıyor, VE sembol
+  işleme artık squelch durumuna hiç bakmıyor (kapalıyken de işliyor - saf
+  gürültü üzerinde sahte kilitlenmeye yol açmadığı zaten kanıtlanmıştı,
+  bkz. `testDmrRfDoesNotFalseLockOnNoise`).
+- Yakalanan burst `MultiBlockControlHeader` olarak çözüldü ama Golay
+  `correctedBits=-1` (düzeltilemedi/güvenilmez) - kısa bir PTT'de tam
+  çağrı başlığını (VoiceLcHeader) değil başka bir burst'ü yakalamış
+  olabiliriz. Bir sonraki test: yukarıdaki düzeltmeyle, uzun bir PTT
+  basışında gerçek bir `VoiceLcHeader` + çağrı başlangıcı yakalanıp
+  yakalanmadığı.
 
 **Slot 1/2 ayrımı**: `DmrRfDemodulator` burst'leri sadece VARIŞ SIRASINA
 göre raporluyor, hangi fiziksel TDMA slotuna ait olduğunu bilmiyor (gerçek
