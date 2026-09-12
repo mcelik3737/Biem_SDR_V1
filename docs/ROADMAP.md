@@ -123,27 +123,25 @@ görüldü, bu yüzden değiştirildi) ile ölçüyor. Düzeltme açıkken korel
 olarak her iki durumda da çalıştırılıp doğrulandı). `ctest` ile 3/3 test
 PASSED, `-Wall -Wextra -Wpedantic -Wshadow` ile de temiz derleniyor.
 
-**Doğrulanmayan / hâlâ açık**: Bu tamamen sentetik bir doğrulama - gerçek
-E4000 DC spike'ının genliği/şekli farklı olabilir, ve "kanalın tam üzerine
-ayarlanmış donanım + üzerine binen gerçek spike" senaryosu yazılımda hiç
-tekrar üretilemez (yukarıda açıklandığı gibi, bu durumda ikisi matematiksel
-olarak aynı frekansta olduğu için düzeltilemez - tek çözüm zaten uygulanan
-"kanaldan uzağa ayarla" yaklaşımı). Yani bu, önceki teoriden çok daha güçlü
-ve kanıta dayalı bir teşhis (kanıtlanmış çalışan bir referans
-implementasyonuyla doğrudan karşılaştırmaya dayanıyor) ama **gerçek
-donanımda henüz test edilmedi** - kullanıcının bir sonraki gerçek RF
-denemesinde doğrulanması gerekiyor.
+**Gerçek donanımda doğrulandı**: Kullanıcı düzeltmeyi Windows'ta gerçek
+RTL-SDR + el telsiziyle tekrar denedi - **konuşma artık duyuluyor** ("tamam
+sesvar"). Yani teşhis doğruydu: sorun gerçekten donanımın kanalın tam
+üzerine ayarlanmasıydı, mikser+DC-blocker düzeltmesi gerçek RF sinyaliyle
+de çalışıyor. Ses kalitesinin (netlik/anlaşılırlık, sadece "ses var mı"
+değil) ayrıntılı teyidi hâlâ bekleniyor - bkz. Faz 1.
 
 ## Faz 1 — Sırada (kullanıcıdan girdi bekleyen)
 
-- [ ] **Ses kalitesi doğrulaması (öncelikli - mixerOffsetHz düzeltmesi
-      sonrası tekrar test)**: yukarıdaki "tık tık" raporu üzerine
-      `mixerOffsetHz` mikser + DC-blocker düzeltmesi eklendi (bkz. ilgili
-      bölüm yukarıda) ama gerçek donanımda henüz doğrulanmadı - kullanıcı
-      güncel kodla yeni bir gerçek kayıt alıp dinleyerek konuşmanın
-      anlaşılır olup olmadığını teyit etmeli. Hâlâ anlaşılmazsa/tık tık
-      sürüyorsa bir sonraki şüpheli: `NbfmDemodulator.h`'daki "known
-      simplifications" - basit tek-kutuplu decimation filtresi.
+- [x] ~~"Tık tık", modülasyon yok~~ - `mixerOffsetHz` düzeltmesiyle
+      çözüldü, kullanıcı gerçek donanımda konuşmayı duyduğunu doğruladı.
+- [ ] **Ses netliği/kalitesi ince ayarı**: konuşma artık duyuluyor ama
+      netlik/anlaşılırlık düzeyi (gürültülü mü, net mi, kelimeler tam
+      ayırt ediliyor mu) henüz ayrıntılı teyit edilmedi. Sorun çıkarsa ilk
+      şüpheli: `NbfmDemodulator.h`'daki "known simplifications" - basit
+      tek-kutuplu kanal/decimation filtreleri (Python referansı 8. dereceden
+      Butterworth kanal filtresi + 5. dereceden bandpass ses filtresi
+      kullanıyor, bizimki tek kutuplu IIR - daha keskin bir filtreye
+      geçmek gerekebilir).
 - [ ] **Hytera HR659 protokolü**: port numarası/numaraları + gerçek bir UDP
       yakalaması (`UdpRawLogger` ile) ya da resmi Hytera protokol dokümanı.
       Bkz. `docs/HYTERA_HR659.md`.
