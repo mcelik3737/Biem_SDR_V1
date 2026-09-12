@@ -42,10 +42,19 @@ endif()
 if(BIEM_HAVE_RTLSDR)
     add_library(biem_sdr_rtl STATIC dsp/RtlSdrSource.cpp)
     target_include_directories(biem_sdr_rtl PRIVATE ${RTLSDR_INCLUDE_DIRS})
+    # PUBLIC (not PRIVATE): biem_sdr_rtl is a STATIC library, and a plain
+    # archive doesn't resolve its own symbol dependencies - whatever links
+    # it (biem_cli, biem_gui) needs the actual rtlsdr library AND, when
+    # pkg-config supplied it as a bare "-lrtlsdr" name plus a separate -L
+    # directory (as vcpkg's librtlsdr.pc does), that directory too. PRIVATE
+    # here silently dropped the -L propagation, which Linux masked because
+    # /usr/lib is already a default linker search path - vcpkg's
+    # installed/<triplet>/lib is NOT a default MSVC search path, so on
+    # Windows this produced "LNK1104: cannot open file 'rtlsdr.lib'".
     if(RTLSDR_LIBRARY_DIRS)
-        target_link_directories(biem_sdr_rtl PRIVATE ${RTLSDR_LIBRARY_DIRS})
+        target_link_directories(biem_sdr_rtl PUBLIC ${RTLSDR_LIBRARY_DIRS})
     endif()
-    target_link_libraries(biem_sdr_rtl PUBLIC biem_core PRIVATE ${RTLSDR_LIBRARIES})
+    target_link_libraries(biem_sdr_rtl PUBLIC biem_core ${RTLSDR_LIBRARIES})
     target_compile_definitions(biem_sdr_rtl PUBLIC BIEM_HAVE_RTLSDR)
 endif()
 
