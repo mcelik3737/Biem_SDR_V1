@@ -43,8 +43,41 @@ Linux sandbox'ta (Ubuntu 24.04, GCC 13.3, Qt6/librtlsdr kurulu değil):
 RTL-SDR donanımı, gerçek DMR/HR659 sinyaliyle test — bunlar Windows'ta ilk
 gerçek denemede yapılmalı (bkz. `docs/BUILD_WINDOWS.md`).
 
+## Windows'ta gerçek donanımla doğrulanan (kullanıcının kendi PC'sinde)
+
+Bu, projenin ilk gerçek RF testiydi — sentetik sinyal değil:
+
+- vcpkg (`sqlite3`, `rtlsdr`) + MSVC (Visual Studio, CMake 4.4.3) ile temiz
+  derleme. Süreçte 3 gerçek, birbirinden farklı hata bulundu ve düzeltildi:
+  yanlış vcpkg port adı (`rtl-sdr` değil `rtlsdr`), CMake'in pkg-config'siz
+  ortamlarda (çıplak Windows) librtlsdr'ı hiç bulamaması (fallback eklendi),
+  ve `biem_sdr_rtl`'in RTLSDR bağımlılıklarını yanlışlıkla `PRIVATE`
+  linklemesi (`PUBLIC` yapılınca düzeldi — bu üçüncüsü Linux'ta hiç
+  görünmüyordu çünkü sistem kütüphanesi zaten varsayılan linker yolunda).
+- **Gerçek RTL-SDR donanımı** (Elonics E4000 tuner'lı bir USB dongle)
+  `RtlSdrSource` ile açıldı, 446.00625 MHz'de (PMR kanal 1, 12.5 kHz)
+  gerçek zamanlı I/Q akışı alındı.
+- **Gerçek bir el telsizinden** aynı frekansa verilen sinyal: boş kanal
+  ~-27..-41 dB dalgalanırken, PTT basılı konuşma sırasında sinyal **+2.9 dB
+  civarında, çok kararlı** bir seviyeye çıktı (~30 dB S/N marjı) - gerçek
+  bir taşıyıcının imzası.
+- Squelch eşiği (-15 dB, gözlemlenen seviyelere göre elle seçildi) ile
+  **iki ayrı PTT basışı iki ayrı çağrı olarak doğru segmentlendi** (4915 ms
+  ve 3822 ms), her ikisi de `.wav` olarak diske yazıldı ve `biem_cli
+  search` ile veritabanından doğru şekilde geri okundu.
+- Ses kalitesi (gerçek konuşmanın anlaşılırlığı) dinlenerek doğrulanacak -
+  bkz. Faz 1 altında ilgili madde.
+
+Yani: RTL-SDR → NBFM demod → squelch tabanlı çağrı segmentasyonu → WAV +
+SQLite → arama zincirinin **tamamı artık gerçek donanım ve gerçek RF
+sinyaliyle uçtan uca doğrulanmış durumda.**
+
 ## Faz 1 — Sırada (kullanıcıdan girdi bekleyen)
 
+- [ ] **Ses kalitesi doğrulaması**: yukarıdaki gerçek kayıtlar dinlenip
+      NBFM demodülatörün çıkardığı sesin anlaşılır/net olup olmadığı teyit
+      edilecek (bkz. `NbfmDemodulator.h`'daki "known simplifications" -
+      basit tek-kutuplu decimation filtresi, gerekirse iyileştirilebilir).
 - [ ] **Hytera HR659 protokolü**: port numarası/numaraları + gerçek bir UDP
       yakalaması (`UdpRawLogger` ile) ya da resmi Hytera protokol dokümanı.
       Bkz. `docs/HYTERA_HR659.md`.
@@ -53,8 +86,9 @@ gerçek denemede yapılmalı (bkz. `docs/BUILD_WINDOWS.md`).
       dsd-fme) bit-bit karşılaştırma. Bkz. `docs/DMR_NOTES.md`.
 - [ ] **DMR ses (AMBE+2) decode kararı**: hangi harici decoder/lisans
       yaklaşımıyla ilerlenecek — kullanıcıyla netleştirilecek.
-- [ ] **Windows'ta ilk gerçek derleme**: Qt6 + librtlsdr ile, gerçek RTL-SDR
-      dongle'a karşı analog FM testi. Bkz. `docs/BUILD_WINDOWS.md`.
+- [x] ~~Windows'ta ilk gerçek derleme~~ — yukarıda, tamamlandı.
+- [ ] **Qt6 GUI'nin ilk gerçek derlemesi** — henüz denenmedi (şu ana kadar
+      hep `biem_cli` ile headless test edildi).
 
 ## Faz 2 — GUI/UX detayları (henüz başlanmadı)
 
