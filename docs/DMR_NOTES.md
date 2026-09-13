@@ -253,6 +253,48 @@ gösterildi. **Gerçek RTL-SDR donanımıyla, gerçek bir DMR el telsizinden
   sonraki test: yukarıdaki kalıcı düzeltmeyle, uzun bir PTT basışında
   gerçek bir `VoiceLcHeader` + çağrı başlangıcı yakalanıp yakalanmadığı.
 
+**Kalıcı düzeltmenin gerçek donanımda doğrulanması** (2026-09-13, Windows/
+MSVC, `ef177fe`, 427.500 MHz, aynı radyo): kullanıcı iki ayrı çalıştırma
+yaptı.
+- **1. çalıştırma - BAŞARILI**: squelch onlarca kez ACIK/kapali çırpınmaya
+  devam etti (beklenen - gerçek TDMA boşluğu), ama bu sefer çırpınma
+  ORTASINDA gerçek bir kilit oluştu ve bir burst çözüldü
+  (`sync-tur=MsSourcedVoice`), ardından `kilit: VAR` durumu 15+ saniye
+  boyunca (çok sayıda `guc seviyesi` satırı boyunca), squelch çırpınmaya
+  devam etmesine rağmen KORUNDU. Bu, düzeltmenin tam olarak tasarlandığı
+  gibi çalıştığının doğrudan kanıtı.
+  - **Önemli nüans - `kilit: VAR`'ın anlamı**: sadece 1 tane
+    "burst alindi" satırı basıldı, `kilit: VAR` süren onlarca saniyeye
+    rağmen. Bu bir hata değil: `locked()` "bu faz en az bir kez
+    doğrulandı VE o zamandan beri gerçekten uzun (>150ms) bir sessizlik
+    görülmedi" anlamına geliyor - "şu anda yeni bir burst aktif olarak
+    çözülüyor" anlamına GELMİYOR. `closedSampleCount_` her ~30ms'lik
+    normal TDMA boşluğunda 150ms eşiğine ulaşamadığı için (kod
+    yorumunda açıklanan tasarım gereği) `resetAcquisition()` hiç
+    tetiklenmedi, dolayısıyla `locked_` tekrar `false` olmadı - kanaldaki
+    başka herhangi bir RF aktivitesi (gerçek DMR burst'ü olsun ya da
+    olmasın) fast gate'i 150ms'den kısa aralıklarla açık tuttuğu sürece
+    böyle davranmaya devam eder. Yani CLI'daki `kilit` sütunu bir "sağlık
+    lambası" gibi okunmamalı - gerçek burst SAYISI için hâlâ tek doğru
+    kaynak `burst alindi` satırlarının kendisi. (İyileştirme fikri: son
+    burst'ten bu yana geçen süreyi de yazdırmak - şimdilik yapılmadı,
+    kullanıcı isterse eklenebilir.)
+  - `renk-kodu=5 veri-tipi=Reserved golay-duzeltilen-bit=-1`: bu ikisi
+    GÜVENİLMEZ, çünkü Slot Type alanının Golay kod çözümü başarısız oldu
+    (`correctedBits=-1`) - önceki testte ölçülen gerçek Color Code (1)
+    bulgusuyla ÇELİŞMİYOR (o, Golay'ın BAŞARILI olduğu farklı bir
+    burst'tü). Senkron kelimesi eşleşmesi (dolayısıyla kilidin kendisi)
+    bundan bağımsız, ayrı bir Hamming-mesafe kontrolü olduğu için
+    etkilenmedi.
+- **2. çalıştırma - kilit oluşmadı**: hemen ardından yapılan ikinci
+  çalıştırmada squelch yine çırpındı ama gözlemlenen pencerede hiç kilit
+  oluşmadı. Aynı ikili dosya bir önce kilitlendiğine göre bu bir
+  regresyon değil - muhtemelen daha kısa/farklı bir PTT basışı (iki
+  senkronun 264±8 bit arayla görülmesi için transmisyonun yeterince
+  uzun sürmesi gerekiyor, bkz. yukarıdaki "ilk burst sadece doğrulama
+  referansı" notu), zaten belgelenmiş "her zaman kilitlenir garantisi
+  yok" sınırlamasıyla tutarlı.
+
 **Slot 1/2 ayrımı**: `DmrRfDemodulator` burst'leri sadece VARIŞ SIRASINA
 göre raporluyor, hangi fiziksel TDMA slotuna ait olduğunu bilmiyor (gerçek
 CACH/zamanlama takibi yok). `biem_cli dmr-live` şimdilik bunu sırayla
