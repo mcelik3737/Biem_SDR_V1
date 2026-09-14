@@ -181,8 +181,53 @@ değil) ayrıntılı teyidi hâlâ bekleniyor - bkz. Faz 1.
 - [ ] **DMR ses (AMBE+2) decode kararı**: hangi harici decoder/lisans
       yaklaşımıyla ilerlenecek — kullanıcıyla netleştirilecek.
 - [x] ~~Windows'ta ilk gerçek derleme~~ — yukarıda, tamamlandı.
-- [ ] **Qt6 GUI'nin ilk gerçek derlemesi** — henüz denenmedi (şu ana kadar
-      hep `biem_cli` ile headless test edildi).
+- [x] ~~Qt6 GUI'nin ilk gerçek derlemesi~~ - bu oturumda, Linux sandbox'ına
+      GEÇİCİ olarak `apt-get install qt6-base-dev qt6-multimedia-dev` ile
+      Qt6 6.4.2 kurulup `biem_gui` GERÇEKTEN derlendi/çalıştırıldı ilk kez
+      (bu kurulum kalıcı değil - sadece bu oturumun doğrulaması için,
+      normal geliştirme ortamı hâlâ Qt6'sız; bir sonraki oturumda tekrar
+      gerekebilir). Bunun değeri sadece "derlendi" değil, gerçek bir hata
+      da yakaladı:
+      - **Gerçek bug bulundu ve düzeltildi**: `CallLogWidget.cpp`
+        `QDateTimeEdit`'i sadece ileri-bildirimden (`class QDateTimeEdit;`)
+        kullanıyordu, gerçek `#include <QDateTimeEdit>` YOKTU - derleme
+        hatası (`invalid use of incomplete type`). Hiç derlenmediği için
+        şimdiye kadar hiç yakalanmamıştı. Tek satır düzeltme.
+      - Derleme sonrası `QT_QPA_PLATFORM=offscreen` ile calistirilinca
+        `PlaybackWidget`'in `QMediaPlayer` construct'ı segfault verdi -
+        `gdb` ile kok nedeni bulundu: Qt'nin GStreamer multimedia
+        eklentisi (`libgstreamermediaplugin.so`) icinde, bu minimal
+        sandbox'ta `gstreamer1.0-plugins-good/bad` eksikligi yuzunden -
+        uygulama kodunun kendi hatasi DEGIL (Windows'ta Qt Multimedia
+        varsayilan olarak GStreamer degil WMF backend'ini kullanir, bu
+        spesifik crash orada tekrarlanmasi beklenmez). Paketler kurulunca
+        duzeldi, `biem_gui` 5+ saniye kesintisiz calisti.
+      - `-Wall -Wextra -Wpedantic -Wshadow`: yeni eklenen dosyada (asagida)
+        hic warning yok.
+      - Bir throwaway dogrulama programiyla (commit edilmedi)
+        `LiveSession::start()`'in gercek RTL-SDR donanimi YOKKEN cökmek
+        yerine duzgun bir hata mesaji dondurdugu ve `stop()`'un (iki kez
+        cagrilsa bile) guvenli oldugu dogrulandi.
+      - Gercek bir ekran goruntusu alindi (`QWidget::grab()` + offscreen
+        platform) - GUI'nin gercekten render edildigini kanitliyor, sadece
+        derlendigini degil.
+      - **YENİ: "Canlı Dinleme" sekmesi** (`ui/LiveMonitorWidget.h/.cpp`) -
+        `biem_cli live`/`dmr-live`'ın GUI karşılığı: mod (FM/DMR) + frekans
+        + squelch + kazanç seçimi, Baslat/Durdur, canlı güç seviyesi
+        göstergesi, squelch/kilit/aktif-çağrı durum etiketleri, ve
+        `biem_cli`'nin stderr satırlarının aynısını gösteren bir günlük
+        paneli. Önceki `ui/` iskeleti SADECE geçmiş kayıtları arayıp
+        oynatabiliyordu - canlı alımı BAŞLATACAK hiçbir yolu yoktu. Bir
+        `LiveSession` (QObject) nesnesi gerçek arka plan iş parçacığından
+        (RtlSdrSource'un kendi thread'i) gelen callback'leri Qt sinyalleri
+        üzerinden GUI thread'ine güvenle taşıyor (Qt'nin otomatik
+        queued-connection davranışı - bkz. sınıfın kendi yorumu) ve
+        MainWindow'un paylaştığı Database yerine KENDİ Database
+        bağlantısını açıyor (Database tek thread'den erişilmeli diye
+        belgelenmiş - WAL modu sayesinde iki ayrı bağlantı güvenli).
+        Biten bir çağrı "Cagri Kayitlari" sekmesini otomatik yeniliyor.
+        **Henüz gerçek donanımla test edilmedi** (bu sandbox'ta RTL-SDR
+        cihazı yok) - kullanıcının Windows'ta denemesi gerekiyor.
 
 ## Faz 2 — GUI/UX detayları (henüz başlanmadı)
 

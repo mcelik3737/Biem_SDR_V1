@@ -23,8 +23,13 @@ class CallLogWidget : public QWidget {
 public:
     explicit CallLogWidget(core::Database& db, QWidget* parent = nullptr);
 
-private slots:
+public slots:
+    // Public so a live-receive session (see LiveMonitorWidget) can trigger
+    // a refresh when a call it just recorded should show up here - not
+    // just a click target for searchButton_ anymore.
     void runSearch();
+
+private slots:
     void playSelected();
 
 private:

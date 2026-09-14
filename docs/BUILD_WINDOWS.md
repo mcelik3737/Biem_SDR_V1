@@ -68,3 +68,24 @@ oluşturur - önceden klasör açıp içine girmeyin, iç içe kopya oluşur.)
 3. DMR/repeater kısımlarını, `docs/DMR_NOTES.md` ve
    `docs/HYTERA_HR659.md`'deki doğrulama adımları tamamlanmadan üretimde
    güvenmeyin.
+
+## GUI'yi (`biem_gui`) ilk kez deneme
+
+`biem_gui`, `Qt6 found` ile derlendiyse `build/src/RelWithDebInfo/biem_gui.exe`
+(veya seçtiğiniz config'e göre) olarak çıkar. Açılışta 3 sekme gelir:
+
+- **Canlı Dinleme** — YENİ: mod (Analog FM / DMR), frekans, squelch eşiği,
+  kazanç seçip **Baslat**'a basınca gerçek RTL-SDR'dan alım başlar; güç
+  seviyesi, squelch açık/kapalı, (DMR modunda) kilit VAR/yok ve aktif çağrı
+  durumu canlı güncellenir, her olay alttaki günlük panelinde birikir -
+  `biem_cli live`/`dmr-live`'ı terminalde okumanın GUI karşılığı. Biten bir
+  çağrı otomatik olarak "Cagri Kayitlari" sekmesinde belirir.
+- **Cagri Kayitlari** — geçmiş çağrıları arayın, seçip **Dinle** ile
+  oynatın.
+- **Kanallar** — kanal listesi düzenleyici (henüz sadece bellek içi -
+  kalıcı değil, bkz. `docs/ROADMAP.md` Faz 2).
+
+RTL-SDR takılı değilse veya `librtlsdr` bu derlemede bulunamadıysa
+**Baslat** düğmesi devre dışı kalır / net bir hata mesajı gösterir -
+donanım yokken sessizce çökmemesi gerekir. Eğer çökerse veya başka bir
+şekilde beklenmeyen davranış görürseniz, tam terminal çıktısını paylaşın.

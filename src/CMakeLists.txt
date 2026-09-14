@@ -80,6 +80,7 @@ if(Qt6_FOUND)
         ui/CallLogWidget.cpp
         ui/ChannelListWidget.cpp
         ui/PlaybackWidget.cpp
+        ui/LiveMonitorWidget.cpp
     )
     target_link_libraries(biem_gui PRIVATE biem_core Qt6::Core Qt6::Widgets Qt6::Multimedia)
     if(TARGET biem_sdr_rtl)

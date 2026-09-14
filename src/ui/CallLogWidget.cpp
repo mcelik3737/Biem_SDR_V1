@@ -4,6 +4,7 @@
 
 #include <QAbstractItemView>
 #include <QDateTime>
+#include <QDateTimeEdit>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>

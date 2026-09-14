@@ -9,6 +9,7 @@ namespace biem::ui {
 
 class CallLogWidget;
 class ChannelListWidget;
+class LiveMonitorWidget;
 
 // STATUS: written against Qt6 Widgets/Multimedia APIs but NOT built or run
 // in this repo's development environment (no Qt6 installed there) - see
@@ -23,6 +24,7 @@ private:
     std::unique_ptr<core::Database> db_;
     CallLogWidget* callLogWidget_ = nullptr;
     ChannelListWidget* channelListWidget_ = nullptr;
+    LiveMonitorWidget* liveMonitorWidget_ = nullptr;
 };
 
 } // namespace biem::ui
